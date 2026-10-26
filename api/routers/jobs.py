@@ -43,6 +43,11 @@ class JobCreate(BaseModel):
     scheduled_at: int | None = None
     requires_approval: bool = True # Modo Human-in-the-Loop por padrão para segurança
 
+    # Transformação Audiovisual Anti-Content ID (Sprint 2)
+    enable_bgm: bool = True
+    speed_boost: float = 1.03
+    enable_headline: bool = True
+
 
 class JobResponse(BaseModel):
     job_id: str
@@ -69,6 +74,11 @@ class JobResponse(BaseModel):
     channel_handle: str | None = None
     requires_approval: bool = True
     approval_status: str | None = "pending"
+
+    # Transformação Audiovisual
+    enable_bgm: bool = True
+    speed_boost: float = 1.03
+    enable_headline: bool = True
 
 
 def _serialize_job(job: Job) -> JobResponse:
@@ -102,6 +112,9 @@ def _serialize_job(job: Job) -> JobResponse:
         channel_handle=getattr(job, "channel_handle", None),
         requires_approval=getattr(job, "requires_approval", True) if getattr(job, "requires_approval", None) is not None else True,
         approval_status=getattr(job, "approval_status", "pending") or "pending",
+        enable_bgm=getattr(job, "enable_bgm", True) if getattr(job, "enable_bgm", None) is not None else True,
+        speed_boost=float(getattr(job, "speed_boost", 1.03) or 1.03),
+        enable_headline=getattr(job, "enable_headline", True) if getattr(job, "enable_headline", None) is not None else True,
     )
 
 
@@ -184,6 +197,10 @@ async def upload_job(
     hook_text: str | None = Form(None),
     publish_mode: str = Form("shareNow"),
     due_at: str | None = Form(None),
+    requires_approval: bool = Form(True),
+    enable_bgm: bool = Form(True),
+    speed_boost: float = Form(1.03),
+    enable_headline: bool = Form(True),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -248,6 +265,10 @@ async def upload_job(
         hook_text=hook_text,
         publish_mode=publish_mode,
         due_at=due_at,
+        requires_approval=requires_approval,
+        enable_bgm=enable_bgm,
+        speed_boost=speed_boost,
+        enable_headline=enable_headline,
     )
     session.add(job)
     await session.commit()

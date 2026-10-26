@@ -1,11 +1,16 @@
 import subprocess
 import json
 from pathlib import Path
-import structlog
-
 from config import settings
 
-logger = structlog.get_logger()
+try:
+    import structlog
+    logger = structlog.get_logger()
+    log = logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+    log = logger
 
 OUT = Path(settings.VIDEO_OUTPUT_DIR)
 OUT.mkdir(parents=True, exist_ok=True)
@@ -40,6 +45,23 @@ def _probe_dimensions(video_path: Path) -> tuple[int, int]:
         return int(stream["width"]), int(stream["height"])
     except Exception:
         return 1920, 1080
+
+
+def _probe_has_audio(video_path: Path) -> bool:
+    """Verifica se o arquivo contém trilha de áudio."""
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=codec_type",
+        "-of", "json",
+        str(video_path),
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(out.stdout)
+        return len(data.get("streams", [])) > 0
+    except Exception:
+        return True
 
 
 def detect_speaker_face_x(video_path: Path, start: float, duration: float) -> float | None:
@@ -289,13 +311,20 @@ def cut_and_convert_to_vertical(
     subtitle_style: str = "none",        # "none" | "simple" | "karaoke"
     aspect_mode: str = "fill",           # "fill" (com auto face tracking) | "blur" (fundo desfocado)
     hook_text: str | None = None,        # Texto de gancho nos primeiros 5s
+    headline_text: str | None = None,    # Banner superior chamativo persistente
     jump_cut: bool = True,               # Remove pausas mortas de silêncio se ativo
+    enable_bgm: bool = True,             # Trilha de fundo royalty-free para mascarar Content ID
+    bgm_volume: float = 0.08,            # Volume sutil de BGM (0.05 - 0.12)
+    speed_boost: float = 1.03,           # Leve aceleração (1.03x) para alterar pitch e tempo
 ) -> Path:
     """
-    Corta start→end, converte para 9:16 com auto face tracking, legendas, gancho e jump-cuts opcionais.
+    Corta start→end, converte para 9:16 com auto face tracking, legendas, gancho, headline, BGM e jump-cuts opcionais.
     - fill (padrão): zoom 1080x1920 centralizado no rosto do falante (ou centro se sem rosto).
     - blur: letterbox com fundo desfocado acima e abaixo.
     - hook_text: texto chamativo fixado no topo nos primeiros 4.5s.
+    - headline_text: banner superior persistente durante todo o corte.
+    - enable_bgm: mix de música neutra sutil para quebra de fingerprint de áudio.
+    - speed_boost: aceleração 1.03x de vídeo e áudio contra Content ID.
     - jump_cut: remove pausas mortas de respiração e silêncios mantendo sincronia perfeita.
     """
     out = Path(output_path)
@@ -303,20 +332,23 @@ def cut_and_convert_to_vertical(
     raw_duration = end - start
     duration = min(raw_duration, 59.0) if 59.5 <= raw_duration <= 61.5 else raw_duration
 
+    has_audio = _probe_has_audio(video_path)
+
     # 1. Planejamento de intervalos com jump-cuts se solicitado
     intervals = [(start, end)]
-    if jump_cut and segments:
+    if jump_cut and segments and has_audio:
         intervals = plan_jump_cut_intervals(start, end, segments)
 
     is_jump_cut = len(intervals) > 1 or (len(intervals) == 1 and (abs(intervals[0][0] - start) > 0.05 or abs(intervals[0][1] - end) > 0.05))
     final_target_duration = sum(e - s for s, e in intervals) if is_jump_cut else duration
 
-    # 2. Prepara arquivo de legendas/gancho se necessário
+    # 2. Prepara arquivo de legendas/gancho/headline se necessário
     sub_filter = None
     has_sub = subtitle_style != "none" and bool(segments)
     has_hook = bool(hook_text and hook_text.strip())
+    has_headline = bool(headline_text and headline_text.strip())
 
-    if has_sub or has_hook:
+    if has_sub or has_hook or has_headline:
         from services.subtitle_generator import (
             generate_ass_hook_only,
             generate_ass_simple,
@@ -358,16 +390,17 @@ def cut_and_convert_to_vertical(
                         adjusted.append(item)
 
         clean_hook = hook_text.strip() if has_hook else None
+        clean_headline = headline_text.strip() if has_headline else None
         is_split = (aspect_mode == "split")
 
         if subtitle_style == "karaoke" and adjusted:
-            generate_ass_karaoke(adjusted, sub_path, hook_text=clean_hook, middle_align=is_split)
+            generate_ass_karaoke(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
         elif subtitle_style == "simple" and adjusted:
-            generate_ass_simple(adjusted, sub_path, hook_text=clean_hook, middle_align=is_split)
-        elif clean_hook:
-            generate_ass_hook_only(sub_path, clean_hook, middle_align=is_split)
+            generate_ass_simple(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
+        elif clean_hook or clean_headline:
+            generate_ass_hook_only(sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
         elif adjusted:
-            generate_ass_simple(adjusted, sub_path, middle_align=is_split)
+            generate_ass_simple(adjusted, sub_path, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
         else:
             sub_path = None
 
@@ -378,19 +411,26 @@ def cut_and_convert_to_vertical(
     # 3. Constrói filter_complex conforme o enquadramento escolhido e jump-cuts
     pre_filter = ""
     v_src = "[0:v]"
-    a_src = "0:a?"
+    a_cut_label = None
 
     if is_jump_cut:
         rel_intervals = [(max(0.0, s - start), min(duration, e - start)) for s, e in intervals]
         trim_lines = []
-        for idx, (s_rel, e_rel) in enumerate(rel_intervals):
-            trim_lines.append(f"[0:v]trim=start={s_rel:.3f}:end={e_rel:.3f},setpts=PTS-STARTPTS[v{idx}];")
-            trim_lines.append(f"[0:a]atrim=start={s_rel:.3f}:end={e_rel:.3f},asetpts=PTS-STARTPTS[a{idx}];")
-        concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(len(rel_intervals)))
-        trim_lines.append(f"{concat_inputs}concat=n={len(rel_intervals)}:v=1:a=1[v_cut][a_cut];")
+        if has_audio:
+            for idx, (s_rel, e_rel) in enumerate(rel_intervals):
+                trim_lines.append(f"[0:v]trim=start={s_rel:.3f}:end={e_rel:.3f},setpts=PTS-STARTPTS[v{idx}];")
+                trim_lines.append(f"[0:a]atrim=start={s_rel:.3f}:end={e_rel:.3f},asetpts=PTS-STARTPTS[a{idx}];")
+            concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(len(rel_intervals)))
+            trim_lines.append(f"{concat_inputs}concat=n={len(rel_intervals)}:v=1:a=1[v_cut][a_cut];")
+            a_cut_label = "[a_cut]"
+        else:
+            for idx, (s_rel, e_rel) in enumerate(rel_intervals):
+                trim_lines.append(f"[0:v]trim=start={s_rel:.3f}:end={e_rel:.3f},setpts=PTS-STARTPTS[v{idx}];")
+            concat_inputs = "".join(f"[v{i}]" for i in range(len(rel_intervals)))
+            trim_lines.append(f"{concat_inputs}concat=n={len(rel_intervals)}:v=1:a=0[v_cut];")
+
         pre_filter = "".join(trim_lines)
         v_src = "[v_cut]"
-        a_src = "[a_cut]"
 
     if aspect_mode == "blur":
         bg_filter = (
@@ -403,12 +443,12 @@ def cut_and_convert_to_vertical(
         if sub_filter:
             overlay_and_sub = (
                 f"[bg][main]overlay=(W-w)/2:(H-h)/2[base];"
-                f"[base]{sub_filter}[outv]"
+                f"[base]{sub_filter}[v_framed]"
             )
         else:
-            overlay_and_sub = f"[bg][main]overlay=(W-w)/2:(H-h)/2[outv]"
+            overlay_and_sub = f"[bg][main]overlay=(W-w)/2:(H-h)/2[v_framed]"
 
-        vf = f"{pre_filter}{bg_filter}{main_filter}{overlay_and_sub}"
+        vf_core = f"{pre_filter}{bg_filter}{main_filter}{overlay_and_sub}"
     elif aspect_mode == "split":
         # Modo Podcast / Duas Câmeras Empilhadas (Host em cima, Convidado embaixo)
         orig_w, orig_h = _probe_dimensions(video_path)
@@ -443,11 +483,11 @@ def cut_and_convert_to_vertical(
             f"[top][bottom]vstack=inputs=2,drawbox=x=0:y=958:w={W}:h=4:color=black@0.9:t=fill[stacked];"
         )
         if sub_filter:
-            overlay_and_sub = f"[stacked]{sub_filter}[outv]"
+            overlay_and_sub = f"[stacked]{sub_filter}[v_framed]"
         else:
-            overlay_and_sub = f"[stacked]null[outv]"
+            overlay_and_sub = f"[stacked]null[v_framed]"
 
-        vf = f"{pre_filter}{split_filter}{overlay_and_sub}"
+        vf_core = f"{pre_filter}{split_filter}{overlay_and_sub}"
     else:
         # Preenchimento total 100% com reframe inteligente de rosto (se disponível)
         orig_w, orig_h = _probe_dimensions(video_path)
@@ -475,27 +515,80 @@ def cut_and_convert_to_vertical(
                 )
 
         if sub_filter:
-            vf = f"{pre_filter}{scale_crop}[base];[base]{sub_filter}[outv]"
+            vf_core = f"{pre_filter}{scale_crop}[base];[base]{sub_filter}[v_framed]"
         else:
-            vf = f"{pre_filter}{scale_crop}[outv]"
+            vf_core = f"{pre_filter}{scale_crop}[v_framed]"
+
+    # Aplica speed_boost de vídeo
+    speed_factor = max(1.0, min(1.25, float(speed_boost))) if speed_boost else 1.0
+    if abs(speed_factor - 1.0) > 0.005:
+        vf_full = f"{vf_core};[v_framed]setpts=PTS/{speed_factor:.4f}[outv]"
+    else:
+        vf_full = f"{vf_core};[v_framed]null[outv]"
+
+    # 4. Processamento de áudio (speed_boost e amix com BGM)
+    bgm_path = None
+    if enable_bgm:
+        from services.audio_manager import get_random_bgm
+        bgm_path = get_random_bgm()
+
+    filter_chains = [vf_full]
+    a_out_label = None
+
+    if has_audio:
+        a_in = a_cut_label if is_jump_cut else "[0:a]"
+        if abs(speed_factor - 1.0) > 0.005:
+            filter_chains.append(f"{a_in}atempo={speed_factor:.4f}[maina]")
+        else:
+            filter_chains.append(f"{a_in}aresample=async=1[maina]")
+
+        if bgm_path and bgm_path.exists():
+            bgm_vol = max(0.01, min(0.35, float(bgm_volume)))
+            filter_chains.append(f"[1:a]volume={bgm_vol:.3f}[bgma]")
+            filter_chains.append(f"[maina][bgma]amix=inputs=2:duration=first:dropout_transition=2[outa]")
+            a_out_label = "[outa]"
+        else:
+            filter_chains.append(f"[maina]null[outa]")
+            a_out_label = "[outa]"
+    elif bgm_path and bgm_path.exists():
+        bgm_vol = max(0.01, min(0.35, float(bgm_volume)))
+        filter_chains.append(f"[1:a]volume={bgm_vol:.3f}[outa]")
+        a_out_label = "[outa]"
+
+    final_filter_complex = ";".join(filter_chains)
+
+    # 5. Execução do FFmpeg
+    output_duration = final_target_duration / speed_factor
 
     cmd = [
         "ffmpeg", "-y",
         "-threads", "0",
         "-ss", str(start),
         "-i", str(video_path),
-        "-t", f"{duration:.3f}",
-        "-filter_complex", vf,
+    ]
+
+    if bgm_path and bgm_path.exists():
+        cmd.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
+
+    cmd.extend([
+        "-t", f"{output_duration:.3f}",
+        "-filter_complex", final_filter_complex,
         "-map", "[outv]",
-        "-map", a_src,
+    ])
+
+    if a_out_label:
+        cmd.extend(["-map", a_out_label, "-c:a", "aac", "-b:a", "128k"])
+    else:
+        cmd.append("-an")
+
+    cmd.extend([
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "fastdecode",
         "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(out),
-    ]
+    ])
 
     try:
         subprocess.run(cmd, check=True, capture_output=True)
@@ -508,7 +601,9 @@ def cut_and_convert_to_vertical(
                 video_path, start, end, output_path,
                 segments=segments, subtitle_style=subtitle_style,
                 aspect_mode=aspect_mode, hook_text=hook_text,
-                jump_cut=False,
+                headline_text=headline_text, jump_cut=False,
+                enable_bgm=enable_bgm, bgm_volume=bgm_volume,
+                speed_boost=speed_boost,
             )
         raise RuntimeError(f"FFmpeg falhou ao processar vídeo: {err_msg[:400]}")
     return out
@@ -663,6 +758,11 @@ def split_into_parts(
     aspect_mode: str = "fill",
     hook_text: str | None = None,
     hook_texts: list[str] | None = None,
+    headline_text: str | None = None,
+    headline_texts: list[str] | None = None,
+    enable_bgm: bool = True,
+    bgm_volume: float = 0.08,
+    speed_boost: float = 1.03,
     max_parts: int | None = None,
 ) -> list[Path]:
     """Divide o vídeo em partes com corte inteligente nas falas e converte cada uma para 9:16."""
@@ -685,12 +785,22 @@ def split_into_parts(
         else:
             part_hook = hook_text or f"PARTE {idx} 🔥"
 
+        # Headline text persistente por parte ou global
+        if headline_texts and (idx - 1) < len(headline_texts) and headline_texts[idx - 1]:
+            part_headline = headline_texts[idx - 1]
+        else:
+            part_headline = headline_text
+
         cut_and_convert_to_vertical(
             video_path, start, end, str(out),
             segments=part_segs,
             subtitle_style=subtitle_style,
             aspect_mode=aspect_mode,
             hook_text=part_hook,
+            headline_text=part_headline,
+            enable_bgm=enable_bgm,
+            bgm_volume=bgm_volume,
+            speed_boost=speed_boost,
         )
         outputs.append(out)
 

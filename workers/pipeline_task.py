@@ -145,6 +145,10 @@ async def _run(task: Task, job_id: str):
                     if jump_cut_enabled is None:
                         jump_cut_enabled = True
 
+                    enable_bgm = getattr(job, "enable_bgm", True)
+                    speed_boost = float(getattr(job, "speed_boost", 1.03) or 1.03)
+                    enable_headline = getattr(job, "enable_headline", True)
+
                     for i, seg in enumerate(selected_clips):
                         s_start = float(seg["start"])
                         s_end = float(seg["end"])
@@ -175,6 +179,8 @@ async def _run(task: Task, job_id: str):
                                     elif tot_sub > 1:
                                         p_hook = f"PARTE {p_num}/{tot_sub} 👀"
 
+                                part_title = f"{job.generated_title} (Parte {p_num}/{tot_sub})" if (job.generated_title and tot_sub > 1) else (job.generated_title or p_hook)
+
                                 out_file = str(cut_and_convert_to_vertical(
                                     video_path,
                                     p_start, p_end,
@@ -183,18 +189,21 @@ async def _run(task: Task, job_id: str):
                                     subtitle_style=sub_style,
                                     aspect_mode=asp_mode,
                                     hook_text=p_hook,
+                                    headline_text=part_title if enable_headline else None,
                                     jump_cut=jump_cut_enabled,
+                                    enable_bgm=enable_bgm,
+                                    speed_boost=speed_boost,
                                 ))
                                 output_files.append(out_file)
                                 clip_counter += 1
 
                                 if job.generated_title:
-                                    part_title = f"{job.generated_title} (Parte {p_num}/{tot_sub})" if tot_sub > 1 else job.generated_title
                                     part_metadata[clip_counter] = {
                                         "title": part_title,
                                         "caption": job.generated_caption,
                                     }
                         else:
+                            headline_val = (job.generated_title or hook) if enable_headline else None
                             out_file = str(cut_and_convert_to_vertical(
                                 video_path,
                                 s_start, s_end,
@@ -203,7 +212,10 @@ async def _run(task: Task, job_id: str):
                                 subtitle_style=sub_style,
                                 aspect_mode=asp_mode,
                                 hook_text=hook,
+                                headline_text=headline_val,
                                 jump_cut=jump_cut_enabled,
+                                enable_bgm=enable_bgm,
+                                speed_boost=speed_boost,
                             ))
                             output_files.append(out_file)
                             clip_counter += 1
@@ -216,6 +228,9 @@ async def _run(task: Task, job_id: str):
                     await _set_status(session, job, JobStatus.processing)
                     sub_style = getattr(job, "subtitle_style", "none")
                     asp_mode = getattr(job, "aspect_mode", "fill") or "fill"
+                    enable_bgm = getattr(job, "enable_bgm", True)
+                    speed_boost = float(getattr(job, "speed_boost", 1.03) or 1.03)
+                    enable_headline = getattr(job, "enable_headline", True)
 
                     # 1. Transcreve vídeo para snapping inteligente e legendas
                     segs = None
@@ -257,6 +272,13 @@ async def _run(task: Task, job_id: str):
                         if p_meta:
                             part_metadata[idx] = p_meta
 
+                    part_headlines = None
+                    if enable_headline:
+                        part_headlines = [
+                            part_metadata.get(idx, {}).get("title") or job.generated_title or f"PARTE {idx} 🔥"
+                            for _, _, idx in intervals
+                        ]
+
                     output_files = [str(p) for p in split_into_parts(
                         video_path, job_id, job.part_duration,
                         segments=segs,
@@ -264,6 +286,10 @@ async def _run(task: Task, job_id: str):
                         aspect_mode=asp_mode,
                         hook_texts=part_hooks if enable_hook else None,
                         hook_text=custom_hook,
+                        headline_texts=part_headlines,
+                        headline_text=job.generated_title if enable_headline else None,
+                        enable_bgm=enable_bgm,
+                        speed_boost=speed_boost,
                         max_parts=effective_max,
                     )]
 

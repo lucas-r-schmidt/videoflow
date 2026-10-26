@@ -119,6 +119,7 @@ def get_ass_header(middle_align: bool = False) -> str:
     default_align = 5 if middle_align else 2
     default_margin_v = 0 if middle_align else 480
     hook_margin_v = 220 if middle_align else 320
+    headline_margin_v = 140
 
     return (
         "[Script Info]\n"
@@ -129,7 +130,8 @@ def get_ass_header(middle_align: bool = False) -> str:
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,Arial,66,&H00FFFFFF,&H000000FF,&H00000000,&H99000000,-1,0,0,0,100,100,2,0,1,4,2,{default_align},60,60,{default_margin_v},1\n"
-        f"Style: Hook,Arial,58,&H0000FFFF,&H000000FF,&H00000000,&HAA000000,-1,0,0,0,100,100,2,0,3,16,0,8,70,70,{hook_margin_v},1\n\n"
+        f"Style: Hook,Arial,58,&H0000FFFF,&H000000FF,&H00000000,&HAA000000,-1,0,0,0,100,100,2,0,3,16,0,8,70,70,{hook_margin_v},1\n"
+        f"Style: Headline,Arial,50,&H00FFFFFF,&H000000FF,&H00000000,&HCC111827,-1,0,0,0,100,100,2,0,3,16,0,8,60,60,{headline_margin_v},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -173,14 +175,27 @@ def create_hook_event(hook_text: str, duration: float = 4.5) -> str:
     return f"Dialogue: 1,0:00:00.00,{end_str},Hook,,0,0,0,,{{\\fad(250,300)}}{formatted}"
 
 
+def create_headline_event(headline_text: str, duration: float = 60.0) -> str:
+    """Gera a linha Dialogue ASS para o banner fixo superior durante todo o corte."""
+    formatted = format_hook_text(headline_text, max_chars_per_line=28)
+    end_str = _ass_time(duration)
+    return f"Dialogue: 2,0:00:00.00,{end_str},Headline,,0,0,0,,{formatted}"
+
+
 def generate_ass_hook_only(
     output_path: Path,
     hook_text: str,
     duration: float = 4.5,
     middle_align: bool = False,
+    headline_text: str | None = None,
+    total_duration: float = 60.0,
 ) -> Path:
-    """Gera arquivo .ass contendo apenas o gancho visual nos primeiros segundos."""
-    events = [create_hook_event(hook_text, duration)]
+    """Gera arquivo .ass contendo apenas o gancho visual ou banner superior."""
+    events = []
+    if headline_text and headline_text.strip():
+        events.append(create_headline_event(headline_text.strip(), total_duration))
+    if hook_text and hook_text.strip():
+        events.append(create_hook_event(hook_text, duration))
     header = get_ass_header(middle_align)
     output_path.write_text(header + "\n".join(events), encoding="utf-8")
     return output_path
@@ -193,8 +208,10 @@ def generate_ass_simple(
     hook_text: str | None = None,
     hook_duration: float = 4.5,
     middle_align: bool = False,
+    headline_text: str | None = None,
+    total_duration: float = 60.0,
 ) -> Path:
-    """Gera arquivo .ass para legendas simples linha a linha, com gancho opcional no topo."""
+    """Gera arquivo .ass para legendas simples linha a linha, com gancho e headline opcionais."""
     words  = extract_words(segments)
     blocks = []
     buf    = []
@@ -214,6 +231,8 @@ def generate_ass_simple(
         blocks.append((buf_start, buf_end, " ".join(x.text for x in buf)))
 
     events = []
+    if headline_text and headline_text.strip():
+        events.append(create_headline_event(headline_text.strip(), total_duration))
     if hook_text and hook_text.strip():
         events.append(create_hook_event(hook_text.strip(), hook_duration))
 
@@ -234,15 +253,19 @@ def generate_ass_karaoke(
     hook_text: str | None = None,
     hook_duration: float = 4.5,
     middle_align: bool = False,
+    headline_text: str | None = None,
+    total_duration: float = 60.0,
 ) -> Path:
     """
     Gera arquivo .ass com efeito karaoke:
     linha com N palavras visíveis, palavra ativa em amarelo bold,
-    mais gancho no topo nos primeiros segundos se fornecido.
+    mais gancho no topo e banner superior se fornecidos.
     """
     words  = extract_words(segments)
     events = []
 
+    if headline_text and headline_text.strip():
+        events.append(create_headline_event(headline_text.strip(), total_duration))
     if hook_text and hook_text.strip():
         events.append(create_hook_event(hook_text.strip(), hook_duration))
 

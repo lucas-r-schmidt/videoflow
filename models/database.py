@@ -80,6 +80,11 @@ class Job(Base):
     requires_approval: Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
     approval_status:   Mapped[str]        = mapped_column(String, default="pending", nullable=True) # pending | approved | rejected | published
 
+    # Transformação Audiovisual Anti-Content ID (Sprint 2)
+    enable_bgm:        Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
+    speed_boost:       Mapped[float]      = mapped_column(Float, default=1.03, nullable=True)
+    enable_headline:   Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
+
     created_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)
     updated_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -148,6 +153,9 @@ async def init_db():
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS upload_date VARCHAR;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS approval_status VARCHAR DEFAULT 'pending';",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS enable_bgm BOOLEAN DEFAULT TRUE;",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS speed_boost FLOAT DEFAULT 1.03;",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS enable_headline BOOLEAN DEFAULT TRUE;",
         ]
         for stmt in alter_statements:
             try:

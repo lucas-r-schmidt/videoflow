@@ -98,6 +98,11 @@ export default function Dashboard() {
   const [maxSeqParts, setMaxSeqParts]       = useState(0) // 0 = todas as partes
   const [showAdvanced, setShowAdvanced]     = useState(false)
 
+  // ── Tratamentos Audiovisuais Fair Use / Anti-Content ID (Sprint 2) ──
+  const [enableBgm, setEnableBgm]           = useState(true)
+  const [speedBoost, setSpeedBoost]         = useState(1.03)
+  const [enableHeadline, setEnableHeadline] = useState(true)
+
   // ── Destination & Schedule State ──────────────────────────────
   const [destinationMode, setDestMode]      = useState('publish') // 'publish' | 'download_only'
   const [platforms, setPlatforms]           = useState(['buffer'])
@@ -386,6 +391,9 @@ export default function Dashboard() {
           niche_preset:      nichePreset,
           enable_hook:       enableHook,
           hook_text:         enableHook ? (hookText.trim() || null) : null,
+          enable_bgm:        enableBgm,
+          speed_boost:       speedBoost,
+          enable_headline:   enableHeadline,
           publish_mode:      effectivePubMode,
           due_at:            dueAtIso,
           requires_approval: requiresApproval,
@@ -407,6 +415,9 @@ export default function Dashboard() {
         formData.append('aspect_mode', aspectMode)
         formData.append('niche_preset', nichePreset)
         formData.append('enable_hook', String(enableHook))
+        formData.append('enable_bgm', String(enableBgm))
+        formData.append('speed_boost', String(speedBoost))
+        formData.append('enable_headline', String(enableHeadline))
         formData.append('requires_approval', String(requiresApproval))
         if (enableHook && hookText.trim()) {
           formData.append('hook_text', hookText.trim())
@@ -871,6 +882,65 @@ export default function Dashboard() {
                 )}
               </div>
 
+              {/* ── Tratamentos Audiovisuais Fair Use & Anti-Content ID (Sprint 2) ── */}
+              <div style={{
+                marginTop: 16,
+                padding: '12px 14px',
+                background: 'rgba(234,179,8,0.05)',
+                borderRadius: 10,
+                border: '1px solid rgba(234,179,8,0.2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10
+              }}>
+                <div style={{ fontSize: '.84rem', fontWeight: 600, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Shield size={15} color="#eab308" /> Proteção Anti-Content ID & Fair Use
+                </div>
+                <div className="choice-grid-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
+                  <div style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '.78rem', fontWeight: 700 }}>Trilha Neutra (BGM) 🎵</div>
+                      <div style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>Música de fundo sutil</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${enableBgm ? 'btn-primary' : 'btn-outline'}`}
+                      onClick={() => setEnableBgm(!enableBgm)}
+                    >
+                      {enableBgm ? 'Ativo' : 'Off'}
+                    </button>
+                  </div>
+
+                  <div style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '.78rem', fontWeight: 700 }}>Aceleração 1.03x ⚡</div>
+                      <div style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>Altera pitch & tempo</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${speedBoost > 1.0 ? 'btn-primary' : 'btn-outline'}`}
+                      onClick={() => setSpeedBoost(speedBoost > 1.0 ? 1.0 : 1.03)}
+                    >
+                      {speedBoost > 1.0 ? '1.03x' : '1.0x'}
+                    </button>
+                  </div>
+
+                  <div style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '.78rem', fontWeight: 700 }}>Headline Superior 🏷️</div>
+                      <div style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>Banner persistente</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${enableHeadline ? 'btn-primary' : 'btn-outline'}`}
+                      onClick={() => setEnableHeadline(!enableHeadline)}
+                    >
+                      {enableHeadline ? 'Ativo' : 'Off'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* Painel de Ajustes Finos de Duração, Partes e Jump Cut */}
               {(showAdvanced || activePreset !== 'viral_ai') && (
                 <div style={{
@@ -1226,12 +1296,27 @@ export default function Dashboard() {
 
                 <div>
                   <div className="phone-notch" />
+                  {enableHeadline && (
+                    <div style={{
+                      background: 'rgba(0,0,0,0.88)',
+                      color: '#fff',
+                      fontSize: '.58rem',
+                      fontWeight: 800,
+                      padding: '3px 6px',
+                      textAlign: 'center',
+                      borderBottom: '2px solid #eab308',
+                      letterSpacing: '.3px',
+                      textTransform: 'uppercase'
+                    }}>
+                      TÍTULO DO CORTE 🔥
+                    </div>
+                  )}
                   {enableHook ? (
                     <div className="phone-hook-banner">
                       {hookText.trim() || '🔥 GANCHO IA (PRIMEIROS 5S)'}
                     </div>
                   ) : (
-                    <div style={{ height: 24 }} />
+                    <div style={{ height: enableHeadline ? 6 : 24 }} />
                   )}
                 </div>
 
@@ -1280,6 +1365,9 @@ export default function Dashboard() {
                 <span className="badge badge-muted">
                   {destinationMode === 'publish' ? '🚀 Auto-Post' : '📥 Download'}
                 </span>
+                {enableBgm && <span className="badge badge-warn" style={{ fontSize: '.62rem' }}>🎵 BGM Neutro</span>}
+                {speedBoost > 1.0 && <span className="badge badge-info" style={{ fontSize: '.62rem' }}>⚡ 1.03x</span>}
+                {enableHeadline && <span className="badge badge-muted" style={{ fontSize: '.62rem' }}>🏷️ Headline</span>}
               </div>
             </div>
 

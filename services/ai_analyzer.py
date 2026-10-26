@@ -652,7 +652,7 @@ def rank_segments_gemini_multimodal(video_path: str, max_duration: int = 60, max
             f"{niche_info['ranking_directive']}\n\n"
             f"REGRAS:\n"
             f"1. {qty_instruction}\n"
-            f"2. NUNCA selecione trechos de patrocínio, anúncios comerciais, saudações iniciais ou despedidas.\n"
+            f"2. NUNCA selecione trechos de patrocínio, anúncios comerciais, saudações iniciais, despedidas ou momentos com músicas comerciais em primeiro plano (alto risco de Content ID).\n"
             f"3. Responda EXCLUSIVAMENTE em formato JSON: {{\"best\": [{{\"start\": 120.0, \"end\": {120.0 + float(target_dur)}, \"score\": 10}}]}}"
         )
 
@@ -749,7 +749,8 @@ def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: in
         "ou comerciais pagos. Isso NÃO É MELHOR MOMENTO e arruína a audiência.\n"
         "2. PROIBIDO INTRODUÇÕES E VINHETAS: NUNCA selecione saudações iniciais ('fala galera', 'seja bem-vindo'), "
         "apresentações formais de convidados ou pedidos de like/inscrição ('deixe seu like', 'se inscreva no canal').\n"
-        "3. PROIBIDO ENCERRAMENTOS: NUNCA selecione despedidas, agradecimentos finais ou créditos.\n\n"
+        "3. PROIBIDO ENCERRAMENTOS: NUNCA selecione despedidas, agradecimentos finais ou créditos.\n"
+        "4. PROIBIDO MÚSICAS PROTEGIDAS / TRECHOS MUSICAIS: NUNCA selecione trechos onde toca música comercial de fundo ou cantoria protegida por direitos autorais (alto risco de Content ID).\n\n"
         "CRITÉRIOS OBRIGATÓRIOS DO MELHOR MOMENTO:\n"
         "- Deve ser o CLÍMAX do vídeo: uma revelação surpreendente, história inacreditável, insight poderoso, debate acalorado, "
         "momento muito engraçado ou ensinamento marcante sobre o TEMA PRINCIPAL do vídeo.\n"
@@ -800,6 +801,14 @@ def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: in
         score = float(item.get("score", 8))
         if _has_heavy_sponsor(clip_speech):
             score -= 10.0  # Penaliza severamente para descartar trecho comercial
+
+        # Detecção de risco de música comercial / Content ID
+        try:
+            from services.audio_manager import detect_music_risk
+            if detect_music_risk(clip_segs):
+                score -= 8.0  # Penaliza trechos musicais com alto risco de copyright
+        except Exception:
+            pass
 
         processed_clips.append({
             "start": round(s, 1),
