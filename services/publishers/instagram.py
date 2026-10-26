@@ -61,6 +61,18 @@ async def publish_reel(
         return r.json()
 
 
+async def delete_reel(media_id: str, access_token: str) -> bool:
+    """Remove Reel do Instagram via Graph API (Kill Switch)."""
+    if not media_id or not access_token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.delete(f"{GRAPH}/{media_id}", params={"access_token": access_token})
+            return r.status_code in (200, 204, 404)
+    except Exception:
+        return False
+
+
 async def _wait_container(client, container_id: str, token: str, max_tries: int = 24):
     for attempt in range(max_tries):
         r = await client.get(f"{GRAPH}/{container_id}", params={

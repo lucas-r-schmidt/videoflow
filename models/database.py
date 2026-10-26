@@ -80,13 +80,34 @@ class Job(Base):
     requires_approval: Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
     approval_status:   Mapped[str]        = mapped_column(String, default="pending", nullable=True) # pending | approved | rejected | published
 
-    # Transformação Audiovisual Anti-Content ID (Sprint 2)
+    # Transformação Audiovisual Anti-Content ID (Sprint 2 & 4)
     enable_bgm:        Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
     speed_boost:       Mapped[float]      = mapped_column(Float, default=1.03, nullable=True)
     enable_headline:   Mapped[bool]       = mapped_column(Boolean, default=True, nullable=True)
+    horizontal_flip:   Mapped[bool]       = mapped_column(Boolean, default=False, nullable=True)
+    watermark_text:    Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Rastreamento de Publicação Externa & Kill Switch (Sprint 3)
+    platform_post_ids: Mapped[str]        = mapped_column(Text, default="[]", nullable=True) # JSON list de post IDs externos
 
     created_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)
     updated_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TakedownRequest(Base):
+    """Solicitações formais de remoção de conteúdo (DMCA / Notificação Extrajudicial)."""
+    __tablename__ = "takedown_requests"
+
+    id:             Mapped[str]           = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id:         Mapped[str | None]    = mapped_column(String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    video_url:      Mapped[str | None]    = mapped_column(String, nullable=True)
+    claimant_name:  Mapped[str]           = mapped_column(String, nullable=False)
+    claimant_email: Mapped[str]           = mapped_column(String, nullable=False)
+    reason:         Mapped[str]           = mapped_column(Text, nullable=False)
+    status:         Mapped[str]           = mapped_column(String, default="pending", nullable=False) # pending | resolved | rejected
+    resolution_notes: Mapped[str | None]  = mapped_column(Text, nullable=True)
+    created_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 DEFAULT_AUTHORIZED_CHANNELS = [
@@ -156,6 +177,9 @@ async def init_db():
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS enable_bgm BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS speed_boost FLOAT DEFAULT 1.03;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS enable_headline BOOLEAN DEFAULT TRUE;",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS horizontal_flip BOOLEAN DEFAULT FALSE;",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watermark_text VARCHAR;",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS platform_post_ids TEXT DEFAULT '[]';",
         ]
         for stmt in alter_statements:
             try:

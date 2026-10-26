@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from api.routers import jobs, auth, channels
+from api.routers import jobs, auth, channels, compliance
 from models.database import Base, engine, init_db
 from models.user import User   # noqa: F401 — registra tabela no metadata
 from config import settings
@@ -73,6 +73,7 @@ app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 app.include_router(jobs.router)
 app.include_router(auth.router)
 app.include_router(channels.router)
+app.include_router(compliance.router)
 
 
 @app.get("/", include_in_schema=False)

@@ -316,6 +316,8 @@ def cut_and_convert_to_vertical(
     enable_bgm: bool = True,             # Trilha de fundo royalty-free para mascarar Content ID
     bgm_volume: float = 0.08,            # Volume sutil de BGM (0.05 - 0.12)
     speed_boost: float = 1.03,           # Leve aceleração (1.03x) para alterar pitch e tempo
+    horizontal_flip: bool = False,       # Espelha horizontalmente o vídeo (anti-fingerprint óptico)
+    watermark_text: str | None = None,   # Marca d'água / assinatura autoral no canto
 ) -> Path:
     """
     Corta start→end, converte para 9:16 com auto face tracking, legendas, gancho, headline, BGM e jump-cuts opcionais.
@@ -325,6 +327,8 @@ def cut_and_convert_to_vertical(
     - headline_text: banner superior persistente durante todo o corte.
     - enable_bgm: mix de música neutra sutil para quebra de fingerprint de áudio.
     - speed_boost: aceleração 1.03x de vídeo e áudio contra Content ID.
+    - horizontal_flip: espelhamento óptico que quebra hashes de imagem sem inverter legendas.
+    - watermark_text: assinatura autoral do canal de cortes no canto inferior.
     - jump_cut: remove pausas mortas de respiração e silêncios mantendo sincronia perfeita.
     """
     out = Path(output_path)
@@ -342,13 +346,14 @@ def cut_and_convert_to_vertical(
     is_jump_cut = len(intervals) > 1 or (len(intervals) == 1 and (abs(intervals[0][0] - start) > 0.05 or abs(intervals[0][1] - end) > 0.05))
     final_target_duration = sum(e - s for s, e in intervals) if is_jump_cut else duration
 
-    # 2. Prepara arquivo de legendas/gancho/headline se necessário
+    # 2. Prepara arquivo de legendas/gancho/headline/watermark se necessário
     sub_filter = None
     has_sub = subtitle_style != "none" and bool(segments)
     has_hook = bool(hook_text and hook_text.strip())
     has_headline = bool(headline_text and headline_text.strip())
+    has_watermark = bool(watermark_text and watermark_text.strip())
 
-    if has_sub or has_hook or has_headline:
+    if has_sub or has_hook or has_headline or has_watermark:
         from services.subtitle_generator import (
             generate_ass_hook_only,
             generate_ass_simple,
@@ -391,16 +396,17 @@ def cut_and_convert_to_vertical(
 
         clean_hook = hook_text.strip() if has_hook else None
         clean_headline = headline_text.strip() if has_headline else None
+        clean_watermark = watermark_text.strip() if has_watermark else None
         is_split = (aspect_mode == "split")
 
         if subtitle_style == "karaoke" and adjusted:
-            generate_ass_karaoke(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
+            generate_ass_karaoke(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, watermark_text=clean_watermark, total_duration=final_target_duration, middle_align=is_split)
         elif subtitle_style == "simple" and adjusted:
-            generate_ass_simple(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
-        elif clean_hook or clean_headline:
-            generate_ass_hook_only(sub_path, hook_text=clean_hook, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
+            generate_ass_simple(adjusted, sub_path, hook_text=clean_hook, headline_text=clean_headline, watermark_text=clean_watermark, total_duration=final_target_duration, middle_align=is_split)
+        elif clean_hook or clean_headline or clean_watermark:
+            generate_ass_hook_only(sub_path, hook_text=clean_hook, headline_text=clean_headline, watermark_text=clean_watermark, total_duration=final_target_duration, middle_align=is_split)
         elif adjusted:
-            generate_ass_simple(adjusted, sub_path, headline_text=clean_headline, total_duration=final_target_duration, middle_align=is_split)
+            generate_ass_simple(adjusted, sub_path, headline_text=clean_headline, watermark_text=clean_watermark, total_duration=final_target_duration, middle_align=is_split)
         else:
             sub_path = None
 
@@ -440,15 +446,7 @@ def cut_and_convert_to_vertical(
         main_filter = (
             f"{v_src}scale={W}:{H}:force_original_aspect_ratio=decrease,setsar=1[main];"
         )
-        if sub_filter:
-            overlay_and_sub = (
-                f"[bg][main]overlay=(W-w)/2:(H-h)/2[base];"
-                f"[base]{sub_filter}[v_framed]"
-            )
-        else:
-            overlay_and_sub = f"[bg][main]overlay=(W-w)/2:(H-h)/2[v_framed]"
-
-        vf_core = f"{pre_filter}{bg_filter}{main_filter}{overlay_and_sub}"
+        vf_base = f"{pre_filter}{bg_filter}{main_filter}[bg][main]overlay=(W-w)/2:(H-h)/2[v_base];"
     elif aspect_mode == "split":
         # Modo Podcast / Duas Câmeras Empilhadas (Host em cima, Convidado embaixo)
         orig_w, orig_h = _probe_dimensions(video_path)
@@ -480,14 +478,9 @@ def cut_and_convert_to_vertical(
             f"{v_src}split=2[v_top_in][v_bot_in];"
             f"[v_top_in]crop={crop_w}:{crop_h}:{crop_x1}:{crop_y},scale={W}:960,setsar=1[top];"
             f"[v_bot_in]crop={crop_w}:{crop_h}:{crop_x2}:{crop_y},scale={W}:960,setsar=1[bottom];"
-            f"[top][bottom]vstack=inputs=2,drawbox=x=0:y=958:w={W}:h=4:color=black@0.9:t=fill[stacked];"
+            f"[top][bottom]vstack=inputs=2,drawbox=x=0:y=958:w={W}:h=4:color=black@0.9:t=fill[v_base];"
         )
-        if sub_filter:
-            overlay_and_sub = f"[stacked]{sub_filter}[v_framed]"
-        else:
-            overlay_and_sub = f"[stacked]null[v_framed]"
-
-        vf_core = f"{pre_filter}{split_filter}{overlay_and_sub}"
+        vf_base = f"{pre_filter}{split_filter}"
     else:
         # Preenchimento total 100% com reframe inteligente de rosto (se disponível)
         orig_w, orig_h = _probe_dimensions(video_path)
@@ -513,11 +506,22 @@ def cut_and_convert_to_vertical(
                     f"{v_src}scale={W}:{H}:force_original_aspect_ratio=increase,"
                     f"crop={W}:{H},setsar=1"
                 )
+        vf_base = f"{pre_filter}{scale_crop}[v_base];"
 
-        if sub_filter:
-            vf_core = f"{pre_filter}{scale_crop}[base];[base]{sub_filter}[v_framed]"
-        else:
-            vf_core = f"{pre_filter}{scale_crop}[v_framed]"
+    # Aplica espelhamento horizontal (hflip) ANTES das legendas para que o texto não fique invertido
+    if horizontal_flip:
+        flip_line = "[v_base]hflip[v_flipped];"
+        v_target = "[v_flipped]"
+    else:
+        flip_line = ""
+        v_target = "[v_base]"
+
+    if sub_filter:
+        sub_line = f"{v_target}{sub_filter}[v_framed]"
+    else:
+        sub_line = f"{v_target}null[v_framed]"
+
+    vf_core = f"{vf_base}{flip_line}{sub_line}"
 
     # Aplica speed_boost de vídeo
     speed_factor = max(1.0, min(1.25, float(speed_boost))) if speed_boost else 1.0
@@ -603,7 +607,8 @@ def cut_and_convert_to_vertical(
                 aspect_mode=aspect_mode, hook_text=hook_text,
                 headline_text=headline_text, jump_cut=False,
                 enable_bgm=enable_bgm, bgm_volume=bgm_volume,
-                speed_boost=speed_boost,
+                speed_boost=speed_boost, horizontal_flip=horizontal_flip,
+                watermark_text=watermark_text,
             )
         raise RuntimeError(f"FFmpeg falhou ao processar vídeo: {err_msg[:400]}")
     return out
@@ -763,6 +768,8 @@ def split_into_parts(
     enable_bgm: bool = True,
     bgm_volume: float = 0.08,
     speed_boost: float = 1.03,
+    horizontal_flip: bool = False,
+    watermark_text: str | None = None,
     max_parts: int | None = None,
 ) -> list[Path]:
     """Divide o vídeo em partes com corte inteligente nas falas e converte cada uma para 9:16."""
@@ -801,6 +808,8 @@ def split_into_parts(
             enable_bgm=enable_bgm,
             bgm_volume=bgm_volume,
             speed_boost=speed_boost,
+            horizontal_flip=horizontal_flip,
+            watermark_text=watermark_text,
         )
         outputs.append(out)
 

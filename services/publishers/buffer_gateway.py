@@ -94,6 +94,28 @@ async def publish_buffer_gateway(
         return result
 
 
+async def delete_buffer_gateway_post(post_id: str) -> bool:
+    """Solicita remoção imediata do post via Buffer Gateway (Kill Switch)."""
+    if not post_id or not settings.BUFFER_GATEWAY_URL:
+        return False
+
+    url = f"{settings.BUFFER_GATEWAY_URL.rstrip('/')}/api/v1/posts/{post_id}"
+    headers = {
+        "X-API-Key": settings.BUFFER_GATEWAY_API_KEY,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.delete(url, headers=headers)
+            if resp.status_code in (200, 204, 404):
+                logger.info("buffer_gateway.delete.success", post_id=post_id)
+                return True
+            logger.warning("buffer_gateway.delete.warn", post_id=post_id, status=resp.status_code)
+            return False
+    except Exception as e:
+        logger.error("buffer_gateway.delete.error", post_id=post_id, error=str(e))
+        return False
+
+
 def _build_caption(job, part_index: int | None = None, total_parts: int | None = None) -> str:
     """Gera legenda e hashtags adequadas para o corte viral."""
     custom_caption = getattr(job, "caption", None)

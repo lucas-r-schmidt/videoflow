@@ -43,10 +43,12 @@ class JobCreate(BaseModel):
     scheduled_at: int | None = None
     requires_approval: bool = True # Modo Human-in-the-Loop por padrão para segurança
 
-    # Transformação Audiovisual Anti-Content ID (Sprint 2)
+    # Transformação Audiovisual Anti-Content ID (Sprint 2 & 4)
     enable_bgm: bool = True
     speed_boost: float = 1.03
     enable_headline: bool = True
+    horizontal_flip: bool = False
+    watermark_text: str | None = None
 
 
 class JobResponse(BaseModel):
@@ -75,10 +77,13 @@ class JobResponse(BaseModel):
     requires_approval: bool = True
     approval_status: str | None = "pending"
 
-    # Transformação Audiovisual
+    # Transformação Audiovisual (Sprint 2 & 4)
     enable_bgm: bool = True
     speed_boost: float = 1.03
     enable_headline: bool = True
+    horizontal_flip: bool = False
+    watermark_text: str | None = None
+    platform_post_ids: str | None = "[]"
 
 
 def _serialize_job(job: Job) -> JobResponse:
@@ -115,6 +120,9 @@ def _serialize_job(job: Job) -> JobResponse:
         enable_bgm=getattr(job, "enable_bgm", True) if getattr(job, "enable_bgm", None) is not None else True,
         speed_boost=float(getattr(job, "speed_boost", 1.03) or 1.03),
         enable_headline=getattr(job, "enable_headline", True) if getattr(job, "enable_headline", None) is not None else True,
+        horizontal_flip=bool(getattr(job, "horizontal_flip", False)),
+        watermark_text=getattr(job, "watermark_text", None),
+        platform_post_ids=getattr(job, "platform_post_ids", "[]") or "[]",
     )
 
 
@@ -201,6 +209,8 @@ async def upload_job(
     enable_bgm: bool = Form(True),
     speed_boost: float = Form(1.03),
     enable_headline: bool = Form(True),
+    horizontal_flip: bool = Form(False),
+    watermark_text: str | None = Form(None),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -269,6 +279,8 @@ async def upload_job(
         enable_bgm=enable_bgm,
         speed_boost=speed_boost,
         enable_headline=enable_headline,
+        horizontal_flip=horizontal_flip,
+        watermark_text=watermark_text,
     )
     session.add(job)
     await session.commit()
@@ -384,6 +396,35 @@ async def reject_job(
     job.approval_status = "rejected"
     await session.commit()
     await session.refresh(job)
+    return _serialize_job(job)
+
+
+@router.post("/{job_id}/kill", response_model=JobResponse)
+async def kill_job(
+    job_id: str,
+    reason: str = "Kill switch acionado pelo painel",
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Aciona o Kill Switch: exclui postagens remotas no Buffer / Instagram e cancela o Job imediatamente.
+    """
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    job.approval_status = "removed_by_takedown"
+    job.status = JobStatus.cancelled
+    job.error_message = f"Removido pelo Kill Switch: {reason}"
+    await session.commit()
+    await session.refresh(job)
+
+    # Dispara task assíncrona para deletar postagens nas APIs externas
+    try:
+        celery_app.send_task("workers.pipeline_task.kill_switch_task", args=[job.id, reason])
+    except Exception as e:
+        logger.warning("jobs.kill_switch.dispatch_failed", error=str(e), job_id=job.id)
+
     return _serialize_job(job)
 
 

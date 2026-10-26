@@ -148,6 +148,8 @@ async def _run(task: Task, job_id: str):
                     enable_bgm = getattr(job, "enable_bgm", True)
                     speed_boost = float(getattr(job, "speed_boost", 1.03) or 1.03)
                     enable_headline = getattr(job, "enable_headline", True)
+                    horizontal_flip = getattr(job, "horizontal_flip", False)
+                    watermark_text = getattr(job, "watermark_text", None)
 
                     for i, seg in enumerate(selected_clips):
                         s_start = float(seg["start"])
@@ -193,6 +195,8 @@ async def _run(task: Task, job_id: str):
                                     jump_cut=jump_cut_enabled,
                                     enable_bgm=enable_bgm,
                                     speed_boost=speed_boost,
+                                    horizontal_flip=horizontal_flip,
+                                    watermark_text=watermark_text,
                                 ))
                                 output_files.append(out_file)
                                 clip_counter += 1
@@ -216,6 +220,8 @@ async def _run(task: Task, job_id: str):
                                 jump_cut=jump_cut_enabled,
                                 enable_bgm=enable_bgm,
                                 speed_boost=speed_boost,
+                                horizontal_flip=horizontal_flip,
+                                watermark_text=watermark_text,
                             ))
                             output_files.append(out_file)
                             clip_counter += 1
@@ -231,6 +237,8 @@ async def _run(task: Task, job_id: str):
                     enable_bgm = getattr(job, "enable_bgm", True)
                     speed_boost = float(getattr(job, "speed_boost", 1.03) or 1.03)
                     enable_headline = getattr(job, "enable_headline", True)
+                    horizontal_flip = getattr(job, "horizontal_flip", False)
+                    watermark_text = getattr(job, "watermark_text", None)
 
                     # 1. Transcreve vídeo para snapping inteligente e legendas
                     segs = None
@@ -290,6 +298,8 @@ async def _run(task: Task, job_id: str):
                         headline_text=job.generated_title if enable_headline else None,
                         enable_bgm=enable_bgm,
                         speed_boost=speed_boost,
+                        horizontal_flip=horizontal_flip,
+                        watermark_text=watermark_text,
                         max_parts=effective_max,
                     )]
 
@@ -393,28 +403,54 @@ async def _publish(
     part_caption: str | None = None,
 ):
     log.info("pipeline.publish.start", platform=platform, file=file_path, part=part_index)
+    pub_result = None
     try:
         plat_lower = (platform or "").lower().strip()
         if plat_lower in ("buffer", "buffer_gateway", "clipe-que-vale", "clipe_que_vale"):
-            await publish_buffer_gateway(
+            pub_result = await publish_buffer_gateway(
                 file_path, job,
                 part_index=part_index, total_parts=total_parts,
                 part_title=part_title, part_caption=part_caption,
             )
         elif plat_lower == "instagram":
-            await publish_reel(
+            pub_result = await publish_reel(
                 file_path, job,
                 part_index=part_index, total_parts=total_parts,
                 part_title=part_title, part_caption=part_caption,
             )
         elif plat_lower == "tiktok":
-            await publish_tiktok(
+            pub_result = await publish_tiktok(
                 file_path, job,
                 part_index=part_index, total_parts=total_parts,
                 part_title=part_title, part_caption=part_caption,
             )
         elif plat_lower == "kwai":
-            await prepare_kwai_upload(job.id, file_path)
+            pub_result = await prepare_kwai_upload(job.id, file_path)
+
+        if pub_result:
+            try:
+                import json
+                existing = []
+                if getattr(job, "platform_post_ids", None):
+                    try:
+                        existing = json.loads(job.platform_post_ids)
+                    except Exception:
+                        existing = []
+                post_id = (
+                    pub_result.get("id")
+                    or pub_result.get("post_id")
+                    or pub_result.get("update_id")
+                    or (pub_result.get("updates", [{}])[0].get("id") if isinstance(pub_result.get("updates"), list) and pub_result.get("updates") else None)
+                )
+                existing.append({
+                    "platform": plat_lower,
+                    "post_id": str(post_id) if post_id else None,
+                    "file": file_path,
+                    "part_index": part_index,
+                })
+                job.platform_post_ids = json.dumps(existing)
+            except Exception as e:
+                log.warning("pipeline.publish.record_post_id_error", error=str(e))
     except Exception as e:
         log.error("pipeline.publish.error", platform=platform, error=str(e))
 
@@ -429,6 +465,64 @@ def publish_job_task(self, job_id: str):
     """Dispara a publicação de um job previamente aprovado pelo usuário."""
     import asyncio
     asyncio.run(_publish_job_async(self, job_id))
+
+
+@celery_app.task(
+    name="workers.pipeline_task.kill_switch_task",
+    bind=True,
+    max_retries=1,
+)
+def kill_switch_task(self, job_id: str, reason: str = "Takedown / Kill Switch acionado"):
+    """Exclui postagens remotas no Buffer / Instagram e cancela o Job imediatamente."""
+    import asyncio
+    asyncio.run(_kill_switch_async(self, job_id, reason))
+
+
+async def _kill_switch_async(task: Task, job_id: str, reason: str):
+    import json
+    from models.database import engine, AsyncSessionLocal
+    from services.publishers.buffer_gateway import delete_buffer_gateway_post
+    from services.publishers.instagram import delete_reel
+
+    log = logger.bind(job_id=job_id)
+    log.info("kill_switch.start", reason=reason)
+
+    try:
+        async with AsyncSessionLocal() as session:
+            job = await session.get(Job, job_id)
+            if not job:
+                log.warning("kill_switch.job_not_found")
+                return
+
+            post_records = []
+            if getattr(job, "platform_post_ids", None):
+                try:
+                    post_records = json.loads(job.platform_post_ids)
+                except Exception:
+                    post_records = []
+
+            for rec in post_records:
+                plat = rec.get("platform", "").lower()
+                pid = rec.get("post_id")
+                if not pid:
+                    continue
+                try:
+                    if "buffer" in plat:
+                        await delete_buffer_gateway_post(str(pid))
+                    elif "instagram" in plat:
+                        token = getattr(job, "ig_access_token", None) or ""
+                        await delete_reel(str(pid), token)
+                    log.info("kill_switch.deleted_remote", platform=plat, post_id=pid)
+                except Exception as e:
+                    log.error("kill_switch.delete_failed", platform=plat, post_id=pid, error=str(e))
+
+            job.status = JobStatus.cancelled
+            job.approval_status = "removed_by_takedown"
+            job.error_message = f"Conteúdo removido pelo Kill Switch. Motivo: {reason}"
+            await session.commit()
+            log.info("kill_switch.completed")
+    finally:
+        await engine.dispose()
 
 
 async def _publish_job_async(task: Task, job_id: str):

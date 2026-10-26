@@ -131,7 +131,8 @@ def get_ass_header(middle_align: bool = False) -> str:
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,Arial,66,&H00FFFFFF,&H000000FF,&H00000000,&H99000000,-1,0,0,0,100,100,2,0,1,4,2,{default_align},60,60,{default_margin_v},1\n"
         f"Style: Hook,Arial,58,&H0000FFFF,&H000000FF,&H00000000,&HAA000000,-1,0,0,0,100,100,2,0,3,16,0,8,70,70,{hook_margin_v},1\n"
-        f"Style: Headline,Arial,50,&H00FFFFFF,&H000000FF,&H00000000,&HCC111827,-1,0,0,0,100,100,2,0,3,16,0,8,60,60,{headline_margin_v},1\n\n"
+        f"Style: Headline,Arial,50,&H00FFFFFF,&H000000FF,&H00000000,&HCC111827,-1,0,0,0,100,100,2,0,3,16,0,8,60,60,{headline_margin_v},1\n"
+        f"Style: Watermark,Arial,36,&H55FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,1,0,1,2,1,3,45,45,115,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -182,16 +183,26 @@ def create_headline_event(headline_text: str, duration: float = 60.0) -> str:
     return f"Dialogue: 2,0:00:00.00,{end_str},Headline,,0,0,0,,{formatted}"
 
 
+def create_watermark_event(watermark_text: str, duration: float = 60.0) -> str:
+    """Gera a linha Dialogue ASS para a marca d'água no canto inferior direito."""
+    safe = re.sub(r"[\r\n\{\}\\]+", "", watermark_text).strip()
+    end_str = _ass_time(duration)
+    return f"Dialogue: 0,0:00:00.00,{end_str},Watermark,,0,0,0,,{safe}"
+
+
 def generate_ass_hook_only(
     output_path: Path,
     hook_text: str,
     duration: float = 4.5,
     middle_align: bool = False,
     headline_text: str | None = None,
+    watermark_text: str | None = None,
     total_duration: float = 60.0,
 ) -> Path:
-    """Gera arquivo .ass contendo apenas o gancho visual ou banner superior."""
+    """Gera arquivo .ass contendo apenas o gancho visual, banner superior ou marca d'água."""
     events = []
+    if watermark_text and watermark_text.strip():
+        events.append(create_watermark_event(watermark_text.strip(), total_duration))
     if headline_text and headline_text.strip():
         events.append(create_headline_event(headline_text.strip(), total_duration))
     if hook_text and hook_text.strip():
@@ -209,9 +220,10 @@ def generate_ass_simple(
     hook_duration: float = 4.5,
     middle_align: bool = False,
     headline_text: str | None = None,
+    watermark_text: str | None = None,
     total_duration: float = 60.0,
 ) -> Path:
-    """Gera arquivo .ass para legendas simples linha a linha, com gancho e headline opcionais."""
+    """Gera arquivo .ass para legendas simples linha a linha, com gancho, headline e watermark opcionais."""
     words  = extract_words(segments)
     blocks = []
     buf    = []
@@ -231,6 +243,8 @@ def generate_ass_simple(
         blocks.append((buf_start, buf_end, " ".join(x.text for x in buf)))
 
     events = []
+    if watermark_text and watermark_text.strip():
+        events.append(create_watermark_event(watermark_text.strip(), total_duration))
     if headline_text and headline_text.strip():
         events.append(create_headline_event(headline_text.strip(), total_duration))
     if hook_text and hook_text.strip():
@@ -254,16 +268,19 @@ def generate_ass_karaoke(
     hook_duration: float = 4.5,
     middle_align: bool = False,
     headline_text: str | None = None,
+    watermark_text: str | None = None,
     total_duration: float = 60.0,
 ) -> Path:
     """
     Gera arquivo .ass com efeito karaoke:
     linha com N palavras visíveis, palavra ativa em amarelo bold,
-    mais gancho no topo e banner superior se fornecidos.
+    mais gancho no topo, banner superior e marca d'água se fornecidos.
     """
     words  = extract_words(segments)
     events = []
 
+    if watermark_text and watermark_text.strip():
+        events.append(create_watermark_event(watermark_text.strip(), total_duration))
     if headline_text and headline_text.strip():
         events.append(create_headline_event(headline_text.strip(), total_duration))
     if hook_text and hook_text.strip():

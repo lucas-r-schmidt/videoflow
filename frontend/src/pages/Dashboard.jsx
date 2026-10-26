@@ -98,10 +98,18 @@ export default function Dashboard() {
   const [maxSeqParts, setMaxSeqParts]       = useState(0) // 0 = todas as partes
   const [showAdvanced, setShowAdvanced]     = useState(false)
 
-  // ── Tratamentos Audiovisuais Fair Use / Anti-Content ID (Sprint 2) ──
+  // ── Tratamentos Audiovisuais Fair Use / Anti-Content ID (Sprint 2 & 4) ──
   const [enableBgm, setEnableBgm]           = useState(true)
   const [speedBoost, setSpeedBoost]         = useState(1.03)
   const [enableHeadline, setEnableHeadline] = useState(true)
+  const [horizontalFlip, setHorizontalFlip] = useState(false)
+  const [watermarkText, setWatermarkText]   = useState('')
+
+  // ── Compliance, Takedowns & Kill Switch (Sprint 3) ────────────
+  const [takedowns, setTakedowns]           = useState([])
+  const [showTakedownsModal, setShowTakedownsModal] = useState(false)
+  const [takedownsLoading, setTakedownsLoading]     = useState(false)
+  const [confirmKillJob, setConfirmKillJob] = useState(null)
 
   // ── Destination & Schedule State ──────────────────────────────
   const [destinationMode, setDestMode]      = useState('publish') // 'publish' | 'download_only'
@@ -222,6 +230,58 @@ export default function Dashboard() {
       setJobs(prev => prev.map(j => j.job_id === jobId ? data : j))
     } catch {
       addToast('Erro ao rejeitar job.', 'error')
+    }
+  }
+
+  // ── Fetch Takedowns & Kill Switch ──────────────────────────────
+  const fetchTakedowns = useCallback(async () => {
+    setTakedownsLoading(true)
+    try {
+      const { data } = await api.get('/compliance/takedowns')
+      if (Array.isArray(data)) setTakedowns(data)
+    } catch {
+      // Silencioso se rota ainda não montada
+    } finally {
+      setTakedownsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchTakedowns()
+  }, [fetchTakedowns])
+
+  const handleKillJob = async (jobId, reason = 'Kill Switch acionado pelo usuário') => {
+    setActionLoadingId(jobId)
+    try {
+      const { data } = await api.post(`/jobs/${jobId}/kill`, null, { params: { reason } })
+      addToast('🛑 Kill Switch acionado! Solicitação de exclusão disparada.', 'warn')
+      setJobs(prev => prev.map(j => j.job_id === jobId ? data : j))
+      setConfirmKillJob(null)
+    } catch (err) {
+      addToast(err?.response?.data?.detail || 'Erro ao executar Kill Switch.', 'error')
+    } finally {
+      setActionLoadingId(null)
+    }
+  }
+
+  const handleResolveTakedown = async (takedownId) => {
+    try {
+      await api.post(`/compliance/takedowns/${takedownId}/resolve`)
+      addToast('Takedown resolvido e Kill Switch executado!', 'success')
+      fetchTakedowns()
+      fetchJobs()
+    } catch {
+      addToast('Erro ao resolver takedown.', 'error')
+    }
+  }
+
+  const handleRejectTakedown = async (takedownId) => {
+    try {
+      await api.post(`/compliance/takedowns/${takedownId}/reject`)
+      addToast('Solicitação de takedown rejeitada.', 'info')
+      fetchTakedowns()
+    } catch {
+      addToast('Erro ao rejeitar takedown.', 'error')
     }
   }
 
@@ -394,6 +454,8 @@ export default function Dashboard() {
           enable_bgm:        enableBgm,
           speed_boost:       speedBoost,
           enable_headline:   enableHeadline,
+          horizontal_flip:   horizontalFlip,
+          watermark_text:    watermarkText.trim() || null,
           publish_mode:      effectivePubMode,
           due_at:            dueAtIso,
           requires_approval: requiresApproval,
@@ -418,6 +480,10 @@ export default function Dashboard() {
         formData.append('enable_bgm', String(enableBgm))
         formData.append('speed_boost', String(speedBoost))
         formData.append('enable_headline', String(enableHeadline))
+        formData.append('horizontal_flip', String(horizontalFlip))
+        if (watermarkText.trim()) {
+          formData.append('watermark_text', watermarkText.trim())
+        }
         formData.append('requires_approval', String(requiresApproval))
         if (enableHook && hookText.trim()) {
           formData.append('hook_text', hookText.trim())
@@ -507,6 +573,19 @@ export default function Dashboard() {
               style={{ gap: 6, borderColor: 'rgba(59,130,246,0.3)', color: '#38bdf8' }}
             >
               <ShieldCheck size={14} /> Canais Autorizados ({authorizedChannels.length})
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setShowTakedownsModal(true)}
+              style={{ gap: 6, borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}
+            >
+              <Shield size={14} /> Takedowns / DMCA
+              {takedowns.filter(t => t.status === 'pending').length > 0 && (
+                <span className="badge badge-danger" style={{ padding: '1px 5px', fontSize: '.62rem', marginLeft: 2 }}>
+                  {takedowns.filter(t => t.status === 'pending').length}
+                </span>
+              )}
             </button>
             <span className="badge badge-info">
               <Zap size={12} /> IA Multimodal + Whisper
@@ -938,6 +1017,34 @@ export default function Dashboard() {
                       {enableHeadline ? 'Ativo' : 'Off'}
                     </button>
                   </div>
+
+                  <div style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '.78rem', fontWeight: 700 }}>Espelhar Vídeo (Flip) 🪞</div>
+                      <div style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>Inversão óptica anti-hash</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${horizontalFlip ? 'btn-primary' : 'btn-outline'}`}
+                      onClick={() => setHorizontalFlip(!horizontalFlip)}
+                    >
+                      {horizontalFlip ? 'Ativo' : 'Off'}
+                    </button>
+                  </div>
+
+                  <div style={{ padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: '.78rem', fontWeight: 700 }}>Marca d'Água do Canal ✍️</div>
+                      <span style={{ fontSize: '.64rem', color: 'var(--text-dim)' }}>Opcional</span>
+                    </div>
+                    <input
+                      className="input"
+                      placeholder="Ex: @seucanaldecortes"
+                      value={watermarkText}
+                      onChange={e => setWatermarkText(e.target.value)}
+                      style={{ fontSize: '.74rem', padding: '3px 8px', height: 28 }}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1320,7 +1427,7 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                <div className="phone-center-subject">
+                <div className="phone-center-subject" style={{ transform: horizontalFlip ? 'scaleX(-1)' : 'none' }}>
                   <Film size={28} style={{ opacity: 0.65, color: 'var(--primary-lit)' }} />
                   <div style={{ fontSize: '.7rem', fontWeight: 700 }}>
                     {tab === 'highlights' ? 'Clímax IA Detectado' : 'Corte Sequencial'}
@@ -1348,6 +1455,22 @@ export default function Dashboard() {
                     </div>
                   )}
                 </div>
+
+                {watermarkText.trim() && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 22,
+                    right: 12,
+                    fontSize: '.54rem',
+                    color: 'rgba(255,255,255,0.75)',
+                    fontWeight: 700,
+                    textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+                    letterSpacing: '.3px',
+                    pointerEvents: 'none'
+                  }}>
+                    {watermarkText.trim()}
+                  </div>
+                )}
               </div>
 
               {/* Resumo das specs ativas */}
@@ -1368,6 +1491,8 @@ export default function Dashboard() {
                 {enableBgm && <span className="badge badge-warn" style={{ fontSize: '.62rem' }}>🎵 BGM Neutro</span>}
                 {speedBoost > 1.0 && <span className="badge badge-info" style={{ fontSize: '.62rem' }}>⚡ 1.03x</span>}
                 {enableHeadline && <span className="badge badge-muted" style={{ fontSize: '.62rem' }}>🏷️ Headline</span>}
+                {horizontalFlip && <span className="badge badge-info" style={{ fontSize: '.62rem' }}>🪞 Flip</span>}
+                {watermarkText.trim() && <span className="badge badge-muted" style={{ fontSize: '.62rem' }}>✍️ {watermarkText.trim()}</span>}
               </div>
             </div>
 
@@ -1556,7 +1681,43 @@ export default function Dashboard() {
                               </div>
                             )}
                             {job.approval_status === 'published' && (
-                              <span className="badge badge-success">🚀 Publicado</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span className="badge badge-success">🚀 Publicado</span>
+                                {confirmKillJob === job.job_id ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)' }}>
+                                    <span style={{ fontSize: '.7rem', color: '#f87171', fontWeight: 600 }}>Excluir das redes?</span>
+                                    <button
+                                      type="button"
+                                      className="btn btn-xs"
+                                      style={{ background: '#ef4444', color: '#fff' }}
+                                      disabled={actionLoadingId === job.job_id}
+                                      onClick={() => handleKillJob(job.job_id)}
+                                    >
+                                      Sim, Kill!
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline btn-xs"
+                                      onClick={() => setConfirmKillJob(null)}
+                                    >
+                                      Não
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn btn-xs"
+                                    style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', gap: 4 }}
+                                    onClick={() => setConfirmKillJob(job.job_id)}
+                                    title="Excluir imediatamente das plataformas conectadas"
+                                  >
+                                    🛑 Kill Switch
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            {job.approval_status === 'removed_by_takedown' && (
+                              <span className="badge badge-danger">🛑 Removido (Kill Switch)</span>
                             )}
                             {job.approval_status === 'rejected' && (
                               <span className="badge badge-danger">🚫 Rejeitado</span>
@@ -1917,6 +2078,144 @@ export default function Dashboard() {
                   ))
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal de Gestão de Takedowns / DMCA (Sprint 3) ──────── */}
+      {showTakedownsModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: 16,
+        }}>
+          <div className="card" style={{
+            width: '100%',
+            maxWidth: 720,
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 0,
+            overflow: 'hidden',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+          }}>
+            {/* Header Modal */}
+            <div style={{
+              padding: '16px 20px',
+              borderBottom: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'var(--surface-2)',
+            }}>
+              <div>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, margin: 0, color: '#f87171' }}>
+                  <Shield size={18} color="#f87171" /> Central de Takedowns & Conformidade
+                </h3>
+                <p style={{ fontSize: '.75rem', color: 'var(--text-dim)', margin: '4px 0 0 0' }}>
+                  Solicitações de retirada enviadas por detentores de direitos. A aprovação remove o post imediatamente via Kill Switch.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                style={{ padding: 6 }}
+                onClick={() => setShowTakedownsModal(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Conteúdo com Scroll */}
+            <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontSize: '.84rem', fontWeight: 700 }}>
+                  Solicitações Recebidas ({takedowns.length})
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={fetchTakedowns}
+                  disabled={takedownsLoading}
+                >
+                  <RefreshCw size={12} style={{ animation: takedownsLoading ? 'spin 1.2s linear infinite' : 'none' }} /> Atualizar
+                </button>
+              </div>
+
+              {takedowns.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 30, color: 'var(--text-dim)', background: 'var(--surface-2)', borderRadius: 10 }}>
+                  Nenhuma notificação de takedown pendente. O pipeline está em conformidade com as regras de Fair Use!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {takedowns.map(t => (
+                    <div
+                      key={t.id}
+                      style={{
+                        padding: '12px 14px',
+                        background: 'var(--surface-2)',
+                        borderRadius: 10,
+                        border: '1px solid var(--border)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: '.88rem' }}>{t.claimant_name}</span>
+                            <span style={{ fontSize: '.74rem', color: 'var(--text-dim)' }}>({t.claimant_email})</span>
+                            <span className={`badge ${t.status === 'resolved' ? 'badge-success' : t.status === 'rejected' ? 'badge-muted' : 'badge-danger'}`} style={{ fontSize: '.64rem' }}>
+                              {t.status === 'resolved' ? 'Resolvido (Excluído)' : t.status === 'rejected' ? 'Rejeitado' : 'Pendente ⚠️'}
+                            </span>
+                          </div>
+                          {t.video_url && (
+                            <div style={{ fontSize: '.72rem', color: 'var(--primary-lit)', marginTop: 2 }}>
+                              Vídeo: {t.video_url}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>
+                          {t.created_at ? new Date(t.created_at).toLocaleString('pt-BR') : ''}
+                        </div>
+                      </div>
+
+                      <div style={{ fontSize: '.76rem', color: 'var(--text-muted)', background: 'var(--surface-3)', padding: '6px 10px', borderRadius: 6 }}>
+                        <strong>Justificativa:</strong> {t.reason}
+                      </div>
+
+                      {t.status === 'pending' && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs"
+                            style={{ background: '#ef4444', color: '#fff' }}
+                            onClick={() => handleResolveTakedown(t.id)}
+                          >
+                            🛑 Aceitar & Excluir (Kill Switch)
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            onClick={() => handleRejectTakedown(t.id)}
+                          >
+                            Rejeitar (Fair Use)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
