@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import String, Integer, Float, DateTime, JSON, Boolean, text, select
+from sqlalchemy import String, Integer, Float, DateTime, JSON, Boolean, Text, ForeignKey, text, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
