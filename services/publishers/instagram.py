@@ -1,5 +1,6 @@
 import asyncio
 import httpx
+from services.publishers.compliance import format_compliance_caption
 
 GRAPH = "https://graph.facebook.com/v20.0"
 
@@ -26,11 +27,15 @@ async def publish_reel(
     if not ig_user_id or not access_token:
         raise ValueError("Instagram credentials não configuradas para este job")
 
-    caption_text = part_caption or getattr(job, "generated_caption", None) or _build_caption(job, part_index, total_parts)
-    if part_index and getattr(job, "generated_caption", None) and not part_caption:
-        part_tag = f"PARTE {part_index}" + (f" de {total_parts}" if total_parts else "") + " 🎬🔥\n\n"
-        if f"PARTE {part_index}" not in caption_text:
-            caption_text = f"{part_tag}{caption_text}"
+    raw_caption = part_caption or getattr(job, "generated_caption", None) or getattr(job, "caption", None)
+    caption_text = format_compliance_caption(
+        base_caption=raw_caption,
+        channel_name=getattr(job, "channel_name", None),
+        channel_handle=getattr(job, "channel_handle", None),
+        source_url=getattr(job, "source_url", None),
+        part_index=part_index,
+        total_parts=total_parts,
+    )
 
 
     async with httpx.AsyncClient(timeout=60) as client:

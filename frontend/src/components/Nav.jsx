@@ -1,33 +1,60 @@
-import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Settings } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Sparkles, Settings, LogOut } from 'lucide-react'
 import { useAuth } from '../App'
 
 export default function Nav() {
-  const { user }   = useAuth()
+  const { user, logout } = useAuth()
   const { pathname } = useLocation()
-
-  const link = (to, label, Icon) => (
-    <Link to={to} style={{
-      display:'flex', alignItems:'center', gap:6,
-      textDecoration:'none',
-      fontSize:'.85rem', fontWeight:600,
-      color: pathname===to ? 'var(--primary-lit)' : 'var(--text-muted)',
-      transition:'color .15s',
-    }}>
-      <Icon size={15} />{label}
-    </Link>
-  )
+  const nav = useNavigate()
 
   return (
     <nav className="nav">
-      <span className="nav-logo">🎬 VideoFlow</span>
-      <div style={{ display:'flex', gap:20 }}>
-        {link('/', 'Dashboard', LayoutDashboard)}
-        {link('/settings', 'Configurações', Settings)}
+      <Link to="/" className="nav-brand">
+        <div className="nav-logo-icon">🎬</div>
+        <span className="nav-logo">VideoFlow</span>
+        <span className="nav-badge">
+          <span className="nav-badge-dot" />
+          Studio 2.0
+        </span>
+      </Link>
+
+      <div className="nav-links">
+        <Link to="/" className={`nav-link ${pathname === '/' ? 'active' : ''}`}>
+          <Sparkles size={15} />
+          Studio de Cortes
+        </Link>
+        <Link to="/settings" className={`nav-link ${pathname === '/settings' ? 'active' : ''}`}>
+          <Settings size={15} />
+          Conexões & Conta
+        </Link>
       </div>
+
       <div className="nav-right">
-        <span style={{ fontSize:'.82rem', color:'var(--text-muted)' }}>{user?.name?.split(' ')[0]}</span>
-        {user?.avatar_url && <img src={user.avatar_url} alt="avatar" className="avatar" />}
+        <span style={{ fontSize: '.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+          {user?.name?.split(' ')[0] || 'Admin'}
+        </span>
+        {user?.avatar_url ? (
+          <img src={user.avatar_url} alt="avatar" className="avatar" />
+        ) : (
+          <div style={{
+            width: 30, height: 30, borderRadius: '50%',
+            background: 'rgba(124, 58, 237, 0.25)',
+            border: '1px solid rgba(124, 58, 237, 0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '.76rem', fontWeight: 800, color: 'var(--primary-lit)'
+          }}>
+            {(user?.name || 'A')[0].toUpperCase()}
+          </div>
+        )}
+        <button
+          type="button"
+          className="btn btn-outline btn-xs"
+          title="Sair da sessão"
+          onClick={() => { logout(); nav('/login') }}
+        >
+          <LogOut size={13} />
+          Sair
+        </button>
       </div>
     </nav>
   )

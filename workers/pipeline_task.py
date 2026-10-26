@@ -269,29 +269,7 @@ async def _run(task: Task, job_id: str):
 
                 log.info("pipeline.processing.done", clips=len(output_files))
 
-                # ── 3. Publicação ─────────────────────────────────
-                await _set_status(session, job, JobStatus.publishing)
-                total_parts = len(output_files)
-
-                for platform in job.platforms:
-                    for idx, file_path in enumerate(output_files, 1):
-                        part_meta = part_metadata.get(idx)
-                        part_no = idx if (not is_highlights or total_parts > 1) else None
-                        tot_no = total_parts if (not is_highlights or total_parts > 1) else None
-                        p_title = part_meta.get("title") if part_meta else job.generated_title
-                        p_caption = part_meta.get("caption") if part_meta else job.generated_caption
-                        await _publish(
-                            platform,
-                            file_path,
-                            job,
-                            log,
-                            part_index=part_no,
-                            total_parts=tot_no,
-                            part_title=p_title,
-                            part_caption=p_caption,
-                        )
-
-                # ── 4. Concluído ──────────────────────────────────
+                # ── 3. Armazenamento e Sincronização dos Cortes ────────
                 try:
                     from services.storage import upload_to_r2, is_r2_configured
                     if is_r2_configured():
@@ -307,6 +285,39 @@ async def _run(task: Task, job_id: str):
                     log.warning("pipeline.storage.r2_failed", error=str(e))
                     job.output_files = output_files
 
+                # ── 4. Publicação ou Fila de Aprovação (Human-in-the-Loop) ──
+                requires_approval = getattr(job, "requires_approval", True)
+                approval_status = getattr(job, "approval_status", "pending")
+                should_auto_publish = (not requires_approval) or (approval_status == "approved")
+
+                if should_auto_publish and job.platforms:
+                    await _set_status(session, job, JobStatus.publishing)
+                    total_parts = len(output_files)
+
+                    for platform in job.platforms:
+                        for idx, file_path in enumerate(output_files, 1):
+                            part_meta = part_metadata.get(idx)
+                            part_no = idx if (not is_highlights or total_parts > 1) else None
+                            tot_no = total_parts if (not is_highlights or total_parts > 1) else None
+                            p_title = part_meta.get("title") if part_meta else job.generated_title
+                            p_caption = part_meta.get("caption") if part_meta else job.generated_caption
+                            await _publish(
+                                platform,
+                                file_path,
+                                job,
+                                log,
+                                part_index=part_no,
+                                total_parts=tot_no,
+                                part_title=p_title,
+                                part_caption=p_caption,
+                            )
+                    job.approval_status = "published"
+                    log.info("pipeline.auto_published", platforms=job.platforms)
+                else:
+                    job.approval_status = "pending"
+                    log.info("pipeline.awaiting_user_approval", job_id=job.id, clips=len(output_files))
+
+                # ── 5. Concluído ──────────────────────────────────
                 await _set_status(session, job, JobStatus.done)
                 log.info("pipeline.done")
 
@@ -380,4 +391,56 @@ async def _publish(
             await prepare_kwai_upload(job.id, file_path)
     except Exception as e:
         log.error("pipeline.publish.error", platform=platform, error=str(e))
+
+
+@celery_app.task(
+    name="workers.pipeline_task.publish_job_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def publish_job_task(self, job_id: str):
+    """Dispara a publicação de um job previamente aprovado pelo usuário."""
+    import asyncio
+    asyncio.run(_publish_job_async(self, job_id))
+
+
+async def _publish_job_async(task: Task, job_id: str):
+    from models.database import engine, AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as session:
+            job = await session.get(Job, job_id)
+            if not job:
+                logger.warning("publish_job.not_found", job_id=job_id)
+                return
+
+            log = logger.bind(job_id=job_id)
+            if not job.output_files:
+                log.warning("publish_job.no_output_files")
+                return
+
+            await _set_status(session, job, JobStatus.publishing)
+            total_parts = len(job.output_files)
+
+            for platform in job.platforms:
+                for idx, file_path in enumerate(job.output_files, 1):
+                    part_no = idx if total_parts > 1 else None
+                    tot_no = total_parts if total_parts > 1 else None
+                    await _publish(
+                        platform,
+                        file_path,
+                        job,
+                        log,
+                        part_index=part_no,
+                        total_parts=tot_no,
+                        part_title=job.generated_title,
+                        part_caption=job.generated_caption,
+                    )
+
+            job.approval_status = "published"
+            await _set_status(session, job, JobStatus.done)
+            log.info("publish_job.completed")
+    finally:
+        await engine.dispose()
+
 

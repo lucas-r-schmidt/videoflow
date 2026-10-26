@@ -77,4 +77,11 @@ def _build_title(job, part_index: int | None = None, total_parts: int | None = N
         part_tag = f"PARTE {part_index}" + (f"/{total_parts}" if total_parts else "") + " 🔥 "
         if f"PARTE {part_index}" not in title:
             title = f"{part_tag}{title}"
-    return title[:150]
+
+    # Adiciona menção de crédito ao criador no TikTok
+    handle = getattr(job, "channel_handle", None) or getattr(job, "channel_name", None)
+    if handle:
+        handle_tag = handle if handle.startswith("@") else f"@{handle}"
+        title = f"{title} | Cr: {handle_tag}"
+
+    return title[:300]

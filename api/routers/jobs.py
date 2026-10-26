@@ -38,9 +38,10 @@ class JobCreate(BaseModel):
     niche_preset: str = "general"  # general | emotional | debate
     enable_hook: bool = True
     hook_text: str | None = None
-    publish_mode: str = "shareNow" # shareNow | addToQueue | scheduled
+    publish_mode: str = "shareNow" # shareNow | addToQueue | scheduled | draft
     due_at: str | None = None      # ISO 8601 UTC string (ex: "2026-10-15T18:00:00Z")
     scheduled_at: int | None = None
+    requires_approval: bool = True # Modo Human-in-the-Loop por padrão para segurança
 
 
 class JobResponse(BaseModel):
@@ -62,6 +63,12 @@ class JobResponse(BaseModel):
     max_clip_duration: int | None = None
     platforms: list[str] = []
     created_at: str | None = None
+
+    # Governança e aprovação
+    channel_name: str | None = None
+    channel_handle: str | None = None
+    requires_approval: bool = True
+    approval_status: str | None = "pending"
 
 
 def _serialize_job(job: Job) -> JobResponse:
@@ -91,6 +98,10 @@ def _serialize_job(job: Job) -> JobResponse:
         max_clip_duration=getattr(job, "max_clip_duration", None),
         platforms=getattr(job, "platforms", None) or [],
         created_at=created_iso,
+        channel_name=getattr(job, "channel_name", None),
+        channel_handle=getattr(job, "channel_handle", None),
+        requires_approval=getattr(job, "requires_approval", True) if getattr(job, "requires_approval", None) is not None else True,
+        approval_status=getattr(job, "approval_status", "pending") or "pending",
     )
 
 
@@ -123,6 +134,24 @@ async def create_job(
     session: AsyncSession = Depends(get_session),
 ):
     job_data = payload.model_dump()
+
+    # Pre-flight Check: Whitelist de canais autorizados e carência mínima
+    if payload.source_type == "youtube" and payload.source_url:
+        from services.downloader import probe_youtube_metadata, check_channel_authorization
+        try:
+            metadata = probe_youtube_metadata(payload.source_url)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        is_auth, reason, matched_ch = await check_channel_authorization(metadata, session)
+        if not is_auth:
+            raise HTTPException(status_code=400, detail=reason)
+
+        job_data["channel_name"] = metadata.get("channel_name")
+        job_data["channel_id"] = metadata.get("channel_id")
+        job_data["channel_handle"] = metadata.get("channel_handle")
+        job_data["upload_date"] = str(metadata.get("upload_date") or "")
+
     split_long = job_data.pop("split_long_clips", True)
     if job_data.get("cut_mode") == "highlights":
         job_data["cut_mode"] = "highlights_split" if split_long else "highlights_single"
@@ -292,5 +321,49 @@ async def cancel_job(
         pass
 
     return {"message": "Job cancelado com sucesso", "status": job.status, "job_id": job.id}
+
+
+@router.post("/{job_id}/publish", response_model=JobResponse)
+async def publish_approved_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Aprova e dispara a publicação dos cortes gerados para as plataformas configuradas.
+    """
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    if not job.output_files:
+        raise HTTPException(status_code=400, detail="O vídeo ainda não foi processado ou não gerou cortes.")
+
+    job.approval_status = "approved"
+    job.status = JobStatus.publishing
+    await session.commit()
+    await session.refresh(job)
+
+    # Dispara task de publicação no Celery
+    celery_app.send_task("workers.pipeline_task.publish_job_task", args=[job.id])
+
+    return _serialize_job(job)
+
+
+@router.post("/{job_id}/reject", response_model=JobResponse)
+async def reject_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    job.approval_status = "rejected"
+    await session.commit()
+    await session.refresh(job)
+    return _serialize_job(job)
+
 
 

@@ -1,15 +1,123 @@
 import re
+import json
 import httpx
 import subprocess
+from datetime import datetime
 from pathlib import Path
+import structlog
 
 import sys
 import shutil
 
 from config import settings
+from sqlalchemy import select
+from models.database import AuthorizedChannel
+
+logger = structlog.get_logger("downloader")
 
 TMP = Path(settings.VIDEO_TMP_DIR)
 TMP.mkdir(parents=True, exist_ok=True)
+
+
+def probe_youtube_metadata(url: str) -> dict:
+    """
+    Extrai metadados do vídeo do YouTube (canal, data de upload, título) sem fazer download.
+    Rápido (1-2s), usado para validação preventiva de whitelist e carência.
+    """
+    _validate_youtube_url(url)
+    ytdlp_bin = shutil.which("yt-dlp")
+    base_cmd = [ytdlp_bin] if ytdlp_bin else [sys.executable, "-m", "yt_dlp"]
+    cmd = base_cmd + [
+        "--dump-single-json",
+        "--skip-download",
+        "--no-playlist",
+        "--no-warnings",
+        "--socket-timeout", "15",
+    ]
+
+    for c_path in [Path("/app/cookies.txt"), Path("cookies.txt")]:
+        try:
+            if c_path.exists() and c_path.stat().st_size > 0:
+                cmd.extend(["--cookies", str(c_path)])
+                break
+        except (PermissionError, OSError):
+            continue
+
+    cmd.extend(["--", url.strip()])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        data = json.loads(proc.stdout)
+        uploader_id = data.get("uploader_id") or ""
+        handle = uploader_id if uploader_id.startswith("@") else (f"@{uploader_id}" if uploader_id else "")
+        return {
+            "channel_id": data.get("channel_id") or uploader_id or "",
+            "channel_name": data.get("channel") or data.get("uploader") or "Canal Desconhecido",
+            "channel_handle": handle or f"@{data.get('uploader', 'criador')}",
+            "channel_url": data.get("channel_url") or data.get("uploader_url") or "",
+            "upload_date": data.get("upload_date"), # formato YYYYMMDD
+            "timestamp": data.get("timestamp"),     # epoch seconds
+            "title": data.get("title") or "",
+            "duration": data.get("duration") or 0,
+        }
+    except Exception as e:
+        logger.warning("downloader.probe_failed", error=str(e), url=url)
+        raise RuntimeError(f"Não foi possível obter informações do vídeo/canal no YouTube: {str(e)[:180]}")
+
+
+async def check_channel_authorization(metadata: dict, session) -> tuple[bool, str | None, AuthorizedChannel | None]:
+    """
+    Verifica se o canal de origem está na Whitelist de canais autorizados e se respeita a carência.
+    """
+    channel_id = (metadata.get("channel_id") or "").strip()
+    channel_handle = (metadata.get("channel_handle") or "").strip().lower()
+    channel_name = (metadata.get("channel_name") or "").strip().lower()
+
+    query = select(AuthorizedChannel).where(AuthorizedChannel.is_active == True)
+    result = await session.execute(query)
+    channels = result.scalars().all()
+
+    matched_channel = None
+    for ch in channels:
+        if ch.channel_id and ch.channel_id.strip() == channel_id:
+            matched_channel = ch
+            break
+        ch_handle = (ch.handle or "").strip().lower()
+        if ch_handle and (ch_handle == channel_handle or ch_handle.lstrip("@") == channel_handle.lstrip("@")):
+            matched_channel = ch
+            break
+        if ch.name and ch.name.strip().lower() == channel_name:
+            matched_channel = ch
+            break
+
+    if not matched_channel:
+        err_msg = (
+            f"O canal '{metadata.get('channel_name')}' ({metadata.get('channel_handle')}) não está cadastrado "
+            "na Whitelist de canais autorizados. Adicione o canal na aba 'Canais Autorizados' para liberar cortes com segurança."
+        )
+        return False, err_msg, None
+
+    # Validação de carência (Grace period)
+    min_delay = matched_channel.min_delay_hours or 0
+    if min_delay > 0:
+        now = datetime.utcnow()
+        timestamp = metadata.get("timestamp")
+        upload_date_str = metadata.get("upload_date")
+        if timestamp:
+            upload_dt = datetime.utcfromtimestamp(timestamp)
+            diff_hours = (now - upload_dt).total_seconds() / 3600.0
+            if diff_hours < min_delay:
+                hours_left = max(0.1, round(min_delay - diff_hours, 1))
+                return False, f"Período de carência ativo para '{matched_channel.name}': este vídeo foi publicado recentemente. É necessário aguardar mais {hours_left}h para respeitar o criador original antes de gerar cortes.", matched_channel
+        elif upload_date_str and len(str(upload_date_str)) == 8:
+            try:
+                upload_dt = datetime.strptime(str(upload_date_str), "%Y%m%d")
+                diff_hours = (now - upload_dt).total_seconds() / 3600.0
+                if diff_hours < min_delay:
+                    return False, f"Período de carência ativo para '{matched_channel.name}': aguarde {min_delay}h após o upload original para publicar cortes.", matched_channel
+            except Exception:
+                pass
+
+    return True, None, matched_channel
 
 
 def _has_oauth2_cache() -> bool:

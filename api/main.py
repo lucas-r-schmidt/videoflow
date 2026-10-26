@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from api.routers import jobs, auth
-from models.database import Base, engine
+from api.routers import jobs, auth, channels
+from models.database import Base, engine, init_db
 from models.user import User   # noqa: F401 — registra tabela no metadata
 from config import settings
 
@@ -14,9 +14,8 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Cria todas as tabelas (jobs + users)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Cria e migra tabelas (jobs, users, authorized_channels) + seed inicial
+    await init_db()
     logger.info("database.initialized")
     yield
     logger.info("app.shutdown")
@@ -73,6 +72,7 @@ app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 app.include_router(jobs.router)
 app.include_router(auth.router)
+app.include_router(channels.router)
 
 
 @app.get("/", include_in_schema=False)
