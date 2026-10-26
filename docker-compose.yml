@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────
+#  Rede interna compartilhada
+# ─────────────────────────────────────────────
+networks:
+  app_net:
+    driver: bridge
+
+# ─────────────────────────────────────────────
+#  Volumes persistentes
+# ─────────────────────────────────────────────
+volumes:
+  pgdata:
+  redis_data:
+  ollama_models: # modelos não redownloaded a cada restart
+  video_tmp: # vídeos baixados/processados temporariamente
+  video_outputs: # outputs finais antes de publicar
+  ytdlp_cache: # cache persistente de tokens OAuth2 do YouTube
+
+# ─────────────────────────────────────────────
+#  Serviços
+# ─────────────────────────────────────────────
+services:
+
+  # ── 1. API (FastAPI) ──────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api
+    command: >
+      uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 --loop uvloop
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    volumes:
+      - video_tmp:/tmp/videos
+      - video_outputs:/app/outputs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [ app_net ]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 300M # FastAPI leve, 1 worker
+          cpus: "0.5"
+
+  # ── 2. Celery Worker (único — processamento sequencial) ────────
+  #    1 worker evita OOM: Whisper + FFmpeg não rodam juntos
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    command: >
+      celery -A workers.celery_app worker --loglevel=info --concurrency=1 --max-tasks-per-child=10
+    env_file: .env
+    volumes:
+      - video_tmp:/tmp/videos
+      - video_outputs:/app/outputs
+      - ytdlp_cache:/home/appuser/.cache/yt-dlp
+      - ./cookies.txt:/app/cookies.txt
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks: [ app_net ]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2000M # FFmpeg leve (Groq processa Whisper e LLM externamente)
+          cpus: "1.0"
+
+  # ── 3. Celery Beat (agendamento de publicações) ────────────────
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery_beat
+    command: >
+      celery -A workers.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    networks: [ app_net ]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 150M
+          cpus: "0.1"
+
+  # ── 4. Redis (fila de tasks + cache) ──────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: >
+      redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1
+    volumes:
+      - redis_data:/data
+    networks: [ app_net ]
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+          cpus: "0.1"
+
+  # ── 5. PostgreSQL ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-video_automation}
+      POSTGRES_USER: ${DB_USER:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [ app_net ]
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-app}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.2"
+
+  # ── 6. Ollama (LLM local — desativado por padrão ao usar Groq) ─
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["local-llm"] # Desativado: usa Groq API (0 MB RAM). Ative com: docker compose --profile local-llm up -d
+    environment:
+      OLLAMA_KEEP_ALIVE: "5m"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks: [ app_net ]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 3000M
+          cpus: "1.0"
+
+  # ── 7. Nginx (desativado — usando Nginx existente do host) ───
+  nginx:
+    image: nginx:alpine
+    container_name: videoflow_nginx
+    profiles: ["disabled"]
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/letsencrypt:ro
+    depends_on: [ api ]
+    networks: [ app_net ]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.1"
+
+# ─────────────────────────────────────────────
+#  Orçamento de RAM com Groq API (pico):
+#
+#  api           300 MB
+#  worker       1000 MB  <- apenas FFmpeg / cortes
+#  beat          150 MB
+#  redis         256 MB
+#  postgres      256 MB
+#  nginx          64 MB
+#  ─────────────────────
+#  Total pico   ~2.0 GB (vs ~8.5 GB com LLM/Whisper locais)
+#  Permite rodar tranquilamente junto com outros projetos!
+# ─────────────────────────────────────────────

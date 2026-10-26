@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel for VideoFlow
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8085 --no-autoupdate
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/videoflow-tunnel.log
+StandardError=append:/var/log/videoflow-tunnel.log
+
+[Install]
+WantedBy=multi-user.target

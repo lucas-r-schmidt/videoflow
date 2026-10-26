@@ -1,0 +1,90 @@
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redis_data:
+  video_tmp:
+  video_outputs:
+
+services:
+  # ── 1. API (FastAPI) ──────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: videoflow_api
+    command: >
+      uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - video_outputs:/app/outputs
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [ app_net ]
+    restart: unless-stopped
+
+  # ── 2. Celery Worker ──────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: videoflow_worker
+    command: >
+      celery -A workers.celery_app worker --loglevel=info --concurrency=1 --max-tasks-per-child=10
+    env_file: .env
+    volumes:
+      - video_tmp:/tmp/videos
+      - video_outputs:/app/outputs
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks: [ app_net ]
+    restart: unless-stopped
+
+  # ── 3. Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: videoflow_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks: [ app_net ]
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── 4. PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: videoflow_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-video_automation}
+      POSTGRES_USER: ${DB_USER:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-videoflow_dev_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [ app_net ]
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-app}" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
