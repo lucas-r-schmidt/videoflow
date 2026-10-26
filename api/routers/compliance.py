@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
 from models.database import get_session, TakedownRequest, Job, JobStatus
-from api.dependencies import get_current_user
-from models.database import User
+from models.user import User
+from api.jwt_auth import get_current_user
 from workers.celery_app import celery_app
 
 try:
@@ -17,7 +17,7 @@ except ImportError:
     import logging
     logger = logging.getLogger("compliance_router")
 
-router = APIRouter(prefix="/compliance", tags=["Compliance & Takedowns"])
+router = APIRouter(prefix="/api/v1/compliance", tags=["Compliance & Takedowns"])
 
 
 class TakedownCreate(BaseModel):
