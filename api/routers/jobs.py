@@ -88,9 +88,15 @@ class JobResponse(BaseModel):
 
 def _serialize_job(job: Job) -> JobResponse:
     web_outputs = []
-    if job.output_files:
-        for f in job.output_files:
-            web_outputs.append(f"/outputs/{Path(f).name}")
+    output_files_list = job.output_files or []
+    if not output_files_list and job.status == JobStatus.done:
+        output_dir = Path("/app/outputs")
+        if output_dir.exists():
+            disk_files = sorted([str(p) for p in output_dir.glob(f"{job.id}_*.mp4")])
+            if disk_files:
+                output_files_list = disk_files
+    for f in output_files_list:
+        web_outputs.append(f"/outputs/{Path(f).name}")
     created_iso = None
     if getattr(job, "created_at", None):
         created_iso = job.created_at.isoformat() + ("Z" if not job.created_at.tzinfo else "")
@@ -368,6 +374,16 @@ async def publish_approved_job(
     job = await session.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job não encontrado.")
+
+    if not job.output_files:
+        output_dir = Path("/app/outputs")
+        if output_dir.exists():
+            disk_files = sorted([str(p) for p in output_dir.glob(f"{job.id}_*.mp4")])
+            if disk_files:
+                job.output_files = disk_files
+                session.add(job)
+                await session.commit()
+                await session.refresh(job)
 
     if not job.output_files:
         raise HTTPException(status_code=400, detail="O vídeo ainda não foi processado ou não gerou cortes.")

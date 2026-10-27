@@ -363,6 +363,8 @@ async def _run(task: Task, job_id: str):
                     log.info("pipeline.awaiting_user_approval", job_id=job.id, clips=len(output_files))
 
                 # ── 5. Concluído ──────────────────────────────────
+                session.add(job)
+                await session.commit()
                 await _set_status(session, job, JobStatus.done)
                 log.info("pipeline.done")
 
@@ -392,12 +394,16 @@ async def _run(task: Task, job_id: str):
 
 async def _set_status(session, job: Job, status: JobStatus):
     try:
-        await session.refresh(job)
-        if job.status == JobStatus.cancelled:
+        from sqlalchemy import select
+        res = await session.execute(select(Job.status).where(Job.id == job.id))
+        current_status = res.scalar_one_or_none()
+        if current_status == JobStatus.cancelled:
+            job.status = JobStatus.cancelled
             return
     except Exception:
         pass
     job.status = status
+    session.add(job)
     await session.commit()
 
 
