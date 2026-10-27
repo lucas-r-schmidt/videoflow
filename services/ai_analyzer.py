@@ -129,6 +129,26 @@ def _get_niche_instructions(niche_preset: str) -> dict:
                 "#ajuda #fazerobem #solidariedade #reflexao #emocionante #shorts"
             ),
         }
+    elif "automotive" in preset or "transito" in preset or "carro" in preset or "socorro" in preset or "valentim" in preset:
+        return {
+            "ranking_directive": (
+                "DIRETRIZES DE NICHO (SEGURANÇA VIÁRIA / RESGATE / MECÂNICA / EDUCATIVO):\n"
+                "- Prioridade ABSOLUTA para momentos de DIAGNÓSTICO MECÂNICO, DICA DE SEGURANÇA, HISTÓRIA DE SUPERAÇÃO OU RESGATE HUMANITÁRIO.\n"
+                "- OBRIGATÓRIO: O veículo deve estar parado, estacionado ou em atendimento seguro pelo socorrista.\n"
+                "- PROIBIDO qualquer cena de direção arriscada em movimento, velocidade ou manobra perigosa (risco de diretrizes da comunidade)."
+            ),
+            "hook_directive": "Frase de alerta educativo ou curiosidade técnica em CAIXA ALTA (ex: 'OLHA O PERIGO DISSO! ⚠️', 'NUNCA FAÇA ISSO NA ESTRADA 🛑', 'VEJA O QUE ACONTECEU! 🚗', 'DICA QUE SALVA VIDAS 👀').",
+            "title_directive": "Título educativo ou de curiosidade automotiva segura (máx 60 caracteres).",
+            "caption_directive": "Legenda com contexto educativo, alerta de trânsito, finalidade instrutiva e hashtags (#segurancaviaria #mecanica #carros #dicasautomotivas #shorts).",
+            "default_hook": "ATENÇÃO A ESSE DETALHE! ⚠️",
+            "default_title": "Dica Essencial de Estrada #Shorts",
+            "default_caption": (
+                "Preste atenção nessa orientação de segurança na estrada! ⚠️🚗\n\n"
+                "Atenção e manutenção preventiva salvam vidas no trânsito.\n\n"
+                "Você já passou por uma situação parecida na rodovia? Comente aqui 👇\n\n"
+                "#segurancaviaria #carros #mecanica #dicasautomotivas #shorts"
+            ),
+        }
     elif "debate" in preset or "podcast" in preset or "futebol" in preset or "polemica" in preset:
         return {
             "ranking_directive": (
@@ -850,11 +870,26 @@ SPONSOR_KEYWORDS = {
     "meu patrocinador", "nosso patrocinador", "apoio desse vídeo", "apoio deste vídeo",
 }
 
+TRAFFIC_RISK_KEYWORDS = {
+    "km/h", "quilômetros por hora", "acelerando", "aceleração máxima", "cortando giro",
+    "costurando", "racha", "rachando", "alta velocidade", "correndo muito", "velocímetro",
+    "ultrapassagem forçada", "contramão", "quase bati", "quase bateu", "quase capotou",
+    "capotou", "bateu de frente", "empinando moto", "dando grau", "sem freio",
+    "sem cinto de segurança", "sem cinto", "furou o sinal", "farol vermelho", "furou o semáforo",
+    "radar móvel", "fugindo da polícia", "fuga da polícia", "perseguição policial",
+}
+
 
 def _has_heavy_sponsor(text: str) -> bool:
     t = text.lower()
     matches = sum(1 for kw in SPONSOR_KEYWORDS if kw in t)
     return matches >= 1
+
+
+def has_traffic_risk(text: str) -> bool:
+    """Detecta termos de risco viário e infração que acionam diretrizes da comunidade no TikTok/Reels."""
+    t = text.lower()
+    return any(kw in t for kw in TRAFFIC_RISK_KEYWORDS)
 
 
 def _split_segments_into_windows(
@@ -942,7 +977,11 @@ def _rank_window(
         "2. PROIBIDO INTRODUÇÕES E VINHETAS: NUNCA selecione saudações iniciais ('fala galera', 'seja bem-vindo'), "
         "apresentações formais de convidados ou pedidos de like/inscrição ('deixe seu like', 'se inscreva no canal').\n"
         "3. PROIBIDO ENCERRAMENTOS: NUNCA selecione despedidas, agradecimentos finais ou créditos.\n"
-        "4. PROIBIDO MÚSICAS PROTEGIDAS / TRECHOS MUSICAIS: NUNCA selecione trechos onde toca música comercial de fundo ou cantoria protegida por direitos autorais (alto risco de Content ID).\n\n"
+        "4. PROIBIDO MÚSICAS PROTEGIDAS / TRECHOS MUSICAIS: NUNCA selecione trechos onde toca música comercial de fundo ou cantoria protegida por direitos autorais (alto risco de Content ID).\n"
+        "5. PROIBIDO DIREÇÃO INSEGURA E ATOS PERIGOSOS NO TRÂNSITO: NUNCA selecione trechos com pessoas dirigindo em alta velocidade, "
+        "filmando velocímetro, segurando celular ao volante, ultrapassagens arriscadas, pilotando moto empinando ou desrespeitando leis de trânsito "
+        "(risco severo de exclusão por 'Diretrizes da Comunidade' no TikTok/Reels). Priorize SEMPRE conversas com o veículo parado, diagnósticos mecânicos, "
+        "resgates e orientações educativas de segurança viária.\n\n"
         "CRITÉRIOS OBRIGATÓRIOS DO MELHOR MOMENTO:\n"
         "- Deve ser o CLÍMAX do vídeo: uma revelação surpreendente, história inacreditável, insight poderoso, debate acalorado, "
         "momento muito engraçado ou ensinamento marcante sobre o TEMA PRINCIPAL do vídeo.\n"
@@ -997,6 +1036,15 @@ def _rank_window(
                 score -= 8.0
         except Exception:
             pass
+
+        # Detecção de risco de segurança viária / infrações de trânsito (Diretrizes TikTok)
+        if has_traffic_risk(clip_speech):
+            score -= 12.0
+            try:
+                import structlog
+                structlog.get_logger().info("ai_analyzer.traffic_risk_penalized", speech_snippet=clip_speech[:60])
+            except Exception:
+                pass
 
         processed.append({
             "start": round(s, 1),

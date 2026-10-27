@@ -51,7 +51,12 @@ async def publish_buffer_gateway(
     profile_name = getattr(settings, "BUFFER_GATEWAY_PROFILE", "clipe-que-vale")
     publish_mode = getattr(job, "publish_mode", None) or getattr(settings, "BUFFER_GATEWAY_MODE", "shareNow")
     due_at = getattr(job, "due_at", None)
-    mode_val = "addToQueue" if publish_mode == "addToQueue" else "shareNow"
+    if publish_mode in ("scheduled", "customScheduled") or due_at:
+        mode_val = "customScheduled"
+    elif publish_mode == "addToQueue":
+        mode_val = "addToQueue"
+    else:
+        mode_val = "shareNow"
 
     data = {
         "text": caption,
@@ -62,8 +67,9 @@ async def publish_buffer_gateway(
         "mode": mode_val,
         "ai_disclosure": "true",
     }
-    if publish_mode == "scheduled" and due_at:
+    if due_at:
         data["due_at"] = str(due_at)
+        data["mode"] = "customScheduled"
 
     log.info(
         "buffer_gateway.upload.start",

@@ -40,6 +40,33 @@ def _ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+# ── 1.1 Filtro de Termos Sensíveis para Redes Sociais ─────────
+TIKTOK_PROFANITY_MASKS = {
+    r"\bporra\b": "p***a",
+    r"\bcaralho\b": "c*****o",
+    r"\bfoder\b": "f***r",
+    r"\bfudeu\b": "f***u",
+    r"\bfudendo\b": "f******o",
+    r"\bmerda\b": "m***a",
+    r"\bputa\b": "p***a",
+    r"\bputaria\b": "p*****a",
+    r"\bbosta\b": "b***a",
+    r"\bviado\b": "v***o",
+    r"\bdesgraça\b": "d******a",
+    r"\bcu\b": "c*",
+}
+
+
+def mask_sensitive_words(text: str) -> str:
+    """Mascara palavrões para evitar penalizações de Diretrizes da Comunidade no TikTok e Instagram."""
+    if not text:
+        return ""
+    out = text
+    for pattern, replacement in TIKTOK_PROFANITY_MASKS.items():
+        out = re.sub(pattern, replacement, out, flags=re.IGNORECASE)
+    return out
+
+
 # ── 2. Extrai palavras com timestamps do Whisper ──────────────
 
 def extract_words(segments: list[dict]) -> list[Word]:
@@ -52,14 +79,15 @@ def extract_words(segments: list[dict]) -> list[Word]:
         if "words" in seg:
             # whisper-timestamped ou Whisper large-v3 com word_timestamps=True
             for w in seg["words"]:
+                cleaned = mask_sensitive_words(w.get("word", w.get("text", "")).strip())
                 words.append(Word(
-                    text  = w.get("word", w.get("text", "")).strip(),
+                    text  = cleaned,
                     start = float(w["start"]),
                     end   = float(w["end"]),
                 ))
         else:
             # Fallback: divide palavras proporcionalmente
-            raw   = seg["text"].strip()
+            raw   = mask_sensitive_words(seg["text"].strip())
             parts = raw.split()
             if not parts:
                 continue
@@ -147,6 +175,7 @@ def format_hook_text(text: str, max_chars_per_line: int = 24) -> str:
         text = sanitize_ptbr_text(text)
     except Exception:
         pass
+    text = mask_sensitive_words(text)
     # Remove caracteres de controle de injeção ASS e quebras de linha
     safe = re.sub(r"[\r\n\{\}\\]+", " ", text).strip()
     clean = re.sub(r"\s+", " ", safe).upper()

@@ -27,6 +27,7 @@ def format_compliance_caption(
     total_parts: int | None = None,
     custom_credit_template: str | None = None,
     contact_email: str | None = None,
+    include_urls: bool = False,
 ) -> str:
     parts = []
 
@@ -57,13 +58,17 @@ def format_compliance_caption(
             creator_tag = f"@{creator_tag}"
         footer_lines.append(f"🎙️ Conteúdo original por {creator_tag} (Corte Fã-Clube Não Oficial).")
 
-    # Link da fonte completa
-    if source_url and source_url.strip():
-        footer_lines.append(f"🔗 Assista ao episódio completo: {source_url.strip()}")
+    # Link da fonte completa (apenas se include_urls=True para evitar flags de 'conteúdo de marca não divulgado' no TikTok)
+    if include_urls and source_url and source_url.strip():
+        footer_lines.append(f"🔗 Episódio completo: {source_url.strip()}")
 
     # Contato direto para remoção preventiva
-    email = contact_email or DEFAULT_TAKEDOWN_CONTACT
-    footer_lines.append(f"📩 Dúvidas de direitos ou solicitação de remoção: {email}")
+    if include_urls:
+        email = contact_email or DEFAULT_TAKEDOWN_CONTACT
+        footer_lines.append(f"📩 Dúvidas de direitos ou remoção: {email}")
+
+    # Aviso de utilidade pública e anti-conteúdo comercial (isenção perante moderação do TikTok e Meta)
+    footer_lines.append("⚠️ Conteúdo de fã-clube com finalidade documental e educativa. Sem vínculo comercial ou patrocínio pago.")
 
     compliance_footer = "\n".join(footer_lines)
     parts.append(compliance_footer)
