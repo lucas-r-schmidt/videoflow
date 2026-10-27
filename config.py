@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     CLOUDFLARE_ACCOUNT_ID: str = ""
     CLOUDFLARE_API_TOKEN: str = ""
 
+    # Provedores de Transcrição Avançada
+    DEEPGRAM_API_KEY: str = ""
+    ASSEMBLYAI_API_KEY: str = ""
+
     # Ingestão / Download Alternativo (Cobalt)
     COBALT_API_URL: str = ""
 
@@ -81,6 +85,9 @@ class Settings(BaseSettings):
     BUFFER_GATEWAY_PROFILE: str = "clipe-que-vale"
     BUFFER_GATEWAY_DEFAULT_SERVICES: str = "tiktok,instagram,youtube"
     BUFFER_GATEWAY_MODE: str = "shareNow"
+
+    # Compliance & Governança
+    TAKEDOWN_CONTACT_EMAIL: str = "clipequevale@gmail.com"
 
 
 settings = Settings()

@@ -11,8 +11,11 @@ Garante que todas as publicações automáticas contenham:
 
 from typing import Any
 
-
-DEFAULT_TAKEDOWN_CONTACT = "videoflow.contato@gmail.com"
+try:
+    from config import settings
+    DEFAULT_TAKEDOWN_CONTACT = getattr(settings, "TAKEDOWN_CONTACT_EMAIL", "clipequevale@gmail.com")
+except Exception:
+    DEFAULT_TAKEDOWN_CONTACT = "clipequevale@gmail.com"
 
 
 def format_compliance_caption(
