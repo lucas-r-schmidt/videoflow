@@ -395,28 +395,167 @@ def transcribe_local(video_path: str) -> list[dict]:
         return []
 
 
+def transcribe_deepgram(video_path: str) -> list[dict]:
+    """Transcreve via Deepgram Nova-2 API com word timestamps (suporta áudios longos sem limite de 25MB)."""
+    deepgram_key = getattr(settings, "DEEPGRAM_API_KEY", "")
+    if not deepgram_key:
+        raise ValueError("DEEPGRAM_API_KEY não configurada.")
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_file = _extract_audio_for_transcription(video_path, Path(tmpdir))
+        with open(audio_file, "rb") as f:
+            audio_bytes = f.read()
+
+    url = "https://api.deepgram.com/v1/listen?model=nova-2&language=pt-BR&smart_format=true&punctuate=true&utterances=true"
+    headers = {
+        "Authorization": f"Token {deepgram_key}",
+        "Content-Type": "audio/mp3",
+    }
+    r = httpx.post(url, headers=headers, content=audio_bytes, timeout=180)
+    r.raise_for_status()
+    data = r.json()
+
+    utterances = data.get("results", {}).get("utterances", [])
+    segments = []
+    if utterances:
+        for u in utterances:
+            words = [
+                {"word": w.get("word", ""), "start": float(w.get("start", 0)), "end": float(w.get("end", 0))}
+                for w in u.get("words", [])
+            ]
+            segments.append({
+                "start": float(u.get("start", 0)),
+                "end": float(u.get("end", 0)),
+                "text": u.get("transcript", "").strip(),
+                "words": words,
+            })
+    else:
+        alt = data.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0]
+        words = alt.get("words", [])
+        curr_words = []
+        for w in words:
+            curr_words.append({"word": w.get("word", ""), "start": float(w.get("start", 0)), "end": float(w.get("end", 0))})
+            if len(curr_words) >= 8 or (curr_words and (float(w.get("start", 0)) - float(curr_words[-1].get("end", 0)) > 0.6)):
+                segments.append({
+                    "start": float(curr_words[0]["start"]),
+                    "end": float(curr_words[-1]["end"]),
+                    "text": " ".join(cw["word"] for cw in curr_words).strip(),
+                    "words": list(curr_words),
+                })
+                curr_words = []
+        if curr_words:
+            segments.append({
+                "start": float(curr_words[0]["start"]),
+                "end": float(curr_words[-1]["end"]),
+                "text": " ".join(cw["word"] for cw in curr_words).strip(),
+                "words": curr_words,
+            })
+    return segments
+
+
+def transcribe_assemblyai(video_path: str) -> list[dict]:
+    """Transcreve via AssemblyAI API com polling e word timestamps."""
+    assemblyai_key = getattr(settings, "ASSEMBLYAI_API_KEY", "")
+    if not assemblyai_key:
+        raise ValueError("ASSEMBLYAI_API_KEY não configurada.")
+
+    import tempfile
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_file = _extract_audio_for_transcription(video_path, Path(tmpdir))
+        with open(audio_file, "rb") as f:
+            audio_bytes = f.read()
+
+    headers = {"Authorization": assemblyai_key}
+
+    upload_res = httpx.post("https://api.assemblyai.com/v2/upload", headers=headers, content=audio_bytes, timeout=120)
+    upload_res.raise_for_status()
+    audio_url = upload_res.json()["upload_url"]
+
+    transcript_req = httpx.post(
+        "https://api.assemblyai.com/v2/transcript",
+        headers=headers,
+        json={"audio_url": audio_url, "language_code": "pt"},
+        timeout=30,
+    )
+    transcript_req.raise_for_status()
+    transcript_id = transcript_req.json()["id"]
+
+    poll_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
+    for _ in range(60):
+        time.sleep(3)
+        poll_res = httpx.get(poll_url, headers=headers, timeout=30)
+        poll_res.raise_for_status()
+        status_data = poll_res.json()
+        if status_data["status"] == "completed":
+            words = status_data.get("words", [])
+            segments = []
+            curr_words = []
+            for w in words:
+                start_sec = float(w.get("start", 0)) / 1000.0
+                end_sec = float(w.get("end", 0)) / 1000.0
+                curr_words.append({"word": w.get("text", ""), "start": start_sec, "end": end_sec})
+                if len(curr_words) >= 8 or (curr_words and (start_sec - float(curr_words[-1]["end"]) > 0.6)):
+                    segments.append({
+                        "start": float(curr_words[0]["start"]),
+                        "end": float(curr_words[-1]["end"]),
+                        "text": " ".join(cw["word"] for cw in curr_words).strip(),
+                        "words": list(curr_words),
+                    })
+                    curr_words = []
+            if curr_words:
+                segments.append({
+                    "start": float(curr_words[0]["start"]),
+                    "end": float(curr_words[-1]["end"]),
+                    "text": " ".join(cw["word"] for cw in curr_words).strip(),
+                    "words": curr_words,
+                })
+            return segments
+        elif status_data["status"] == "error":
+            raise RuntimeError(f"AssemblyAI erro: {status_data.get('error')}")
+
+    raise TimeoutError("AssemblyAI tempo limite de polling excedido.")
+
+
 def transcribe_video(video_path: str) -> list[dict]:
     """
-    Ponto de entrada de transcrição:
+    Ponto de entrada de transcrição em cascata:
     1. Groq Whisper (rápido, tier grátis)
-    2. Cloudflare Workers AI Whisper (10k neurônios/dia grátis)
-    3. Whisper local (fallback offline)
+    2. Deepgram Nova-2 (ultra rápido, sem limite de 25MB, português impecável)
+    3. AssemblyAI (alta precisão e timestamps de palavras)
+    4. Cloudflare Workers AI Whisper (10k neurônios/dia grátis)
+    5. Whisper local (fallback offline)
     """
     import structlog
     log = structlog.get_logger()
 
-    if settings.GROQ_API_KEY:
+    if getattr(settings, "GROQ_API_KEY", ""):
         try:
             return transcribe_groq(video_path)
         except Exception as e:
-            log.warning("pipeline.transcribe_groq.failed", error=str(e))
+            log.warning("pipeline.transcribe_groq.failed", error=str(e)[:150])
 
-    if settings.CLOUDFLARE_ACCOUNT_ID and settings.CLOUDFLARE_API_TOKEN:
+    if getattr(settings, "DEEPGRAM_API_KEY", ""):
+        try:
+            log.info("pipeline.transcribe_deepgram.start")
+            return transcribe_deepgram(video_path)
+        except Exception as e:
+            log.warning("pipeline.transcribe_deepgram.failed", error=str(e)[:150])
+
+    if getattr(settings, "ASSEMBLYAI_API_KEY", ""):
+        try:
+            log.info("pipeline.transcribe_assemblyai.start")
+            return transcribe_assemblyai(video_path)
+        except Exception as e:
+            log.warning("pipeline.transcribe_assemblyai.failed", error=str(e)[:150])
+
+    if getattr(settings, "CLOUDFLARE_ACCOUNT_ID", "") and getattr(settings, "CLOUDFLARE_API_TOKEN", ""):
         try:
             log.info("pipeline.transcribe_cloudflare.start")
             return transcribe_cloudflare(video_path)
         except Exception as e:
-            log.warning("pipeline.transcribe_cloudflare.failed", error=str(e))
+            log.warning("pipeline.transcribe_cloudflare.failed", error=str(e)[:150])
 
     return transcribe_local(video_path)
 
@@ -718,26 +857,79 @@ def _has_heavy_sponsor(text: str) -> bool:
     return matches >= 1
 
 
-def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: int = 3, niche_preset: str = "general") -> list[dict]:
-    """Envia transcrição para LLM (Gemini, Groq, Cerebras, OpenRouter, OpenAI ou Ollama) e retorna segmentos rankeados."""
-    target_dur = int(max_duration or 60)
-    min_dur = 30 if target_dur <= 60 else max(30, int(target_dur * 0.5))
+def _split_segments_into_windows(
+    segments: list[dict],
+    window_duration: float = 600.0,
+    overlap: float = 60.0,
+) -> list[list[dict]]:
+    """
+    Divide a transcrição em janelas deslizantes temporais (ex: 10 min com 1 min de sobreposição).
+    Garante que vídeos longos (30min-2h) sejam analisados por completo sem estourar limites de payload (HTTP 413)
+    das APIs de LLM como Groq e Cerebras.
+    """
+    if not segments:
+        return []
 
+    total_dur = float(segments[-1]["end"]) - float(segments[0]["start"])
+    # Se o vídeo for menor ou igual à janela + margem, retorna em bloco único
+    if total_dur <= (window_duration + 45.0):
+        return [segments]
+
+    chunks = []
+    current_start = float(segments[0]["start"])
+    max_end = float(segments[-1]["end"])
+
+    while current_start < max_end:
+        current_end = current_start + window_duration
+        chunk = [s for s in segments if float(s["end"]) > current_start and float(s["start"]) < current_end]
+        if chunk:
+            chunks.append(chunk)
+        step = window_duration - overlap
+        if step <= 0:
+            step = window_duration
+        current_start += step
+        if current_start >= max_end - overlap:
+            break
+
+    return chunks if chunks else [segments]
+
+
+def _deduplicate_clips(clips: list[dict], min_distance: float = 25.0) -> list[dict]:
+    """
+    Remove clipes duplicados ou excessivamente sobrepostos vindos de janelas adjacentes,
+    preservando o clipe de maior score.
+    """
+    sorted_clips = sorted(clips, key=lambda x: x.get("score", 0), reverse=True)
+    kept = []
+    for c in sorted_clips:
+        overlap = False
+        c_s, c_e = float(c["start"]), float(c["end"])
+        for k in kept:
+            k_s, k_e = float(k["start"]), float(k["end"])
+            ov_s = max(c_s, k_s)
+            ov_e = min(c_e, k_e)
+            if ov_e > ov_s and (ov_e - ov_s) >= min_distance:
+                overlap = True
+                break
+        if not overlap:
+            kept.append(c)
+    return kept
+
+
+def _rank_window(
+    chunk_segs: list[dict],
+    target_dur: int,
+    min_dur: int,
+    qty_instruction: str,
+    niche_info: dict,
+    total_video_dur: float,
+) -> list[dict]:
+    """Envia um bloco de transcrição para LLM e extrai os melhores cortes."""
     text = "\n".join(
-        f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}" for s in segments
+        f"[{s['start']:.1f}s-{s['end']:.1f}s]: {s['text']}" for s in chunk_segs
     )
-
-    if max_clips == 0:
-        qty_instruction = (
-            "Encontre TODOS os momentos contínuos de CLÍMAX e alto potencial viral contidos no vídeo "
-            f"(com duração entre {min_dur} e {target_dur} segundos cada, geralmente de 2 a 8 momentos de destaque). "
-            "Retorne todos os que tiverem conteúdo relevante com score de 7 a 10."
-        )
-    else:
-        n_target = max(max_clips, 2)
-        qty_instruction = f"Encontre os {n_target} melhores momentos contínuos com duração aproximada entre {min_dur} e {target_dur} segundos."
-
-    niche_info = _get_niche_instructions(niche_preset)
+    # Limita tamanho de texto seguro para o payload HTTP da LLM (~25k caracteres)
+    safe_text = text[:25000]
 
     system_prompt = (
         "Você é um Diretor e Editor Especialista em Cortes Virais de Alta Retenção para TikTok, Reels e Shorts.\n"
@@ -763,12 +955,11 @@ def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: in
         f"DURAÇÃO ALVO: entre {min_dur} e {target_dur} segundos por clipe.\n"
         "Lembre-se: IGNORE completamente qualquer publicidade, anúncio ou patrocínio comercial!\n"
         f"Responda no formato exato: {{\"best\": [{{\"start\": 120.0, \"end\": {120.0 + float(target_dur)}, \"score\": 10}}]}}\n\n"
-        f"Transcrição:\n{text[:60000]}"
+        f"Transcrição:\n{safe_text}"
     )
 
     raw = _call_llm_json(system_prompt, user_prompt, temperature=0.2)
 
-    # Extrai JSON da resposta
     start_pos = raw.find("{")
     end_pos = raw.rfind("}") + 1
     if start_pos == -1 or end_pos <= start_pos:
@@ -776,16 +967,13 @@ def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: in
 
     data = json.loads(raw[start_pos:end_pos])
     raw_clips = data.get("best", [])
-
-    total_video_dur = float(segments[-1]["end"]) if segments else 0.0
-    processed_clips = []
-    target_dur = float(max_duration or 60)
+    processed = []
 
     for item in raw_clips:
         s = float(item.get("start", 0.0))
-        e = float(item.get("end", s + target_dur))
+        e = float(item.get("end", s + float(target_dur)))
 
-        # Garante que o corte tenha pelo menos target_dur segundos
+        # Garante que o corte tenha pelo menos 75% da duração desejada
         if (e - s) < (target_dur * 0.75):
             mid = (s + e) / 2.0
             s = max(0.0, mid - (target_dur / 2.0))
@@ -793,30 +981,89 @@ def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: in
 
         if total_video_dur > 0 and e > total_video_dur:
             e = total_video_dur
-            s = max(0.0, e - target_dur)
+            s = max(0.0, e - float(target_dur))
 
-        # Verifica se o trecho contém patrocínio pesado
-        clip_segs = [seg for seg in segments if seg["end"] > s and seg["start"] < e]
+        # Penalização de patrocínio
+        clip_segs = [seg for seg in chunk_segs if seg["end"] > s and seg["start"] < e]
         clip_speech = " ".join(seg.get("text", "") for seg in clip_segs)
         score = float(item.get("score", 8))
         if _has_heavy_sponsor(clip_speech):
-            score -= 10.0  # Penaliza severamente para descartar trecho comercial
+            score -= 10.0
 
         # Detecção de risco de música comercial / Content ID
         try:
             from services.audio_manager import detect_music_risk
             if detect_music_risk(clip_segs):
-                score -= 8.0  # Penaliza trechos musicais com alto risco de copyright
+                score -= 8.0
         except Exception:
             pass
 
-        processed_clips.append({
+        processed.append({
             "start": round(s, 1),
             "end": round(e, 1),
             "score": round(score, 1),
         })
 
-    return sorted(processed_clips, key=lambda x: x["score"], reverse=True)
+    return processed
+
+
+def rank_segments_ai(segments: list[dict], max_duration: int = 60, max_clips: int = 3, niche_preset: str = "general") -> list[dict]:
+    """
+    Envia transcrição para LLM (Gemini, Groq, Cerebras, OpenRouter, OpenAI ou Ollama) e retorna segmentos rankeados.
+    Usa Janela Deslizante (Sliding Window / Chunking) para vídeos médios e longos, evitando erro 413 (Payload Too Large).
+    """
+    if not segments:
+        return []
+
+    import structlog
+    log = structlog.get_logger()
+
+    target_dur = int(max_duration or 60)
+    min_dur = 30 if target_dur <= 60 else max(30, int(target_dur * 0.5))
+    total_video_dur = float(segments[-1]["end"]) if segments else 0.0
+    niche_info = _get_niche_instructions(niche_preset)
+
+    # Divide em blocos temporais de 10 min (600s) com 1 min (60s) de sobreposição
+    windows = _split_segments_into_windows(segments, window_duration=600.0, overlap=60.0)
+    log.info("ai_ranking.chunking_plan", total_windows=len(windows), total_duration=round(total_video_dur, 1))
+
+    qty_per_window = "Encontre de 1 a 2 momentos de maior CLÍMAX" if len(windows) > 1 else (
+        f"Encontre os {max(max_clips, 2)} melhores momentos contínuos" if max_clips > 0 else "Encontre TODOS os momentos contínuos de CLÍMAX"
+    )
+
+    all_candidates = []
+    successful_windows = 0
+
+    for idx, win in enumerate(windows, 1):
+        try:
+            clips = _rank_window(
+                chunk_segs=win,
+                target_dur=target_dur,
+                min_dur=min_dur,
+                qty_instruction=qty_per_window,
+                niche_info=niche_info,
+                total_video_dur=total_video_dur,
+            )
+            if clips:
+                all_candidates.extend(clips)
+                successful_windows += 1
+        except Exception as e:
+            log.warning("ai_ranking.window_failed", window=f"{idx}/{len(windows)}", error=str(e)[:150])
+
+    if not all_candidates:
+        if successful_windows == 0 and len(windows) > 0:
+            raise RuntimeError("Todas as janelas de IA falharam no ranqueamento.")
+        return []
+
+    # Desduplica momentos sobrepostos entre blocos adjacentes mantendo o melhor score
+    unique_candidates = _deduplicate_clips(all_candidates, min_distance=25.0)
+
+    # Ordena por score decrescente
+    sorted_clips = sorted(unique_candidates, key=lambda x: x["score"], reverse=True)
+
+    if max_clips == 0:
+        return [c for c in sorted_clips if c["score"] >= 7.0]
+    return sorted_clips[:max_clips]
 
 
 def rank_segments_ollama(segments: list[dict], max_duration: int = 60) -> list[dict]:
