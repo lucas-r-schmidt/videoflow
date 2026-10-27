@@ -468,6 +468,7 @@ async def _publish(
                 log.warning("pipeline.publish.record_post_id_error", error=str(e))
     except Exception as e:
         log.error("pipeline.publish.error", platform=platform, error=str(e))
+    return pub_result
 
 
 @celery_app.task(
@@ -557,11 +558,12 @@ async def _publish_job_async(task: Task, job_id: str):
             await _set_status(session, job, JobStatus.publishing)
             total_parts = len(job.output_files)
 
+            success_count = 0
             for platform in job.platforms:
                 for idx, file_path in enumerate(job.output_files, 1):
                     part_no = idx if total_parts > 1 else None
                     tot_no = total_parts if total_parts > 1 else None
-                    await _publish(
+                    res = await _publish(
                         platform,
                         file_path,
                         job,
@@ -571,10 +573,19 @@ async def _publish_job_async(task: Task, job_id: str):
                         part_title=job.generated_title,
                         part_caption=job.generated_caption,
                     )
+                    if res:
+                        success_count += 1
 
-            job.approval_status = "published"
-            await _set_status(session, job, JobStatus.done)
-            log.info("publish_job.completed")
+            if success_count > 0:
+                job.approval_status = "published"
+                job.error_message = None
+                await _set_status(session, job, JobStatus.done)
+                log.info("publish_job.completed", success_count=success_count)
+            else:
+                job.approval_status = "approved"
+                job.error_message = "Falha ao enviar para o Buffer Gateway (serviço retornou erro)."
+                await _set_status(session, job, JobStatus.failed)
+                log.error("publish_job.failed_all")
     finally:
         await engine.dispose()
 

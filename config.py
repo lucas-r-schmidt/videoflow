@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500 MB limite padrão
 
     # Buffer Gateway
-    BUFFER_GATEWAY_URL: str = "https://gentleman-productions-white-annually.trycloudflare.com"
+    BUFFER_GATEWAY_URL: str = "https://hub.flowmedia.com.br"
     BUFFER_GATEWAY_API_KEY: str = "gateway_secret_token_123"
     BUFFER_GATEWAY_PROFILE: str = "clipe-que-vale"
     BUFFER_GATEWAY_DEFAULT_SERVICES: str = "tiktok,instagram,youtube"
