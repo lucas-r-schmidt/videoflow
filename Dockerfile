@@ -41,8 +41,9 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Processamento de vídeo
     ffmpeg \
-    # Download YouTube
+    # Download YouTube e JS challenge solver (n challenge)
     curl \
+    quickjs \
     # tini: gerencia sinais corretamente (importante para Celery)
     tini \
     # Utilitários
