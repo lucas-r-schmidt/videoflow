@@ -32,16 +32,24 @@ def probe_youtube_metadata(url: str) -> dict:
         "--skip-download",
         "--no-playlist",
         "--no-warnings",
-        "--socket-timeout", "15",
+        "--ignore-no-formats-error",
+        "--socket-timeout", "20",
     ]
 
-    for c_path in [Path("/app/cookies.txt"), Path("cookies.txt")]:
+    qjs_path = Path("/usr/bin/qjs")
+    if qjs_path.exists():
+        cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}", "--remote-components", "ejs:github"])
+
+    for c_path in [Path("/app/cookies.txt"), Path("cookies.txt"), Path("/home/ubuntu/videoflow/cookies.txt")]:
         try:
             if c_path.exists() and c_path.stat().st_size > 0:
                 cmd.extend(["--cookies", str(c_path)])
                 break
         except (PermissionError, OSError):
             continue
+
+    extractor_args = ["youtube:player_client=web_embedded,web"]
+    cmd.extend(["--extractor-args", ";".join(extractor_args)])
 
     cmd.extend(["--", url.strip()])
     try:
@@ -209,7 +217,7 @@ def download_youtube(url: str, job_id: str) -> Path:
     # 3. Suporte a runtime JS (quickjs) para resolução do 'n challenge' do YouTube
     qjs_path = Path("/usr/bin/qjs")
     if qjs_path.exists():
-        cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}"])
+        cmd.extend(["--js-runtimes", f"quickjs:{qjs_path}", "--remote-components", "ejs:github"])
 
     # 4. Suporte a PO Token (Proof of Origin) e player_clients para contornar bloqueio de datacenter e SABR
     extractor_args = ["youtube:player_client=web_embedded,web"]
