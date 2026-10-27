@@ -23,6 +23,7 @@ class ChannelCreate(BaseModel):
     min_delay_hours: int = 24
     credit_template: str | None = None
     is_active: bool = True
+    auto_watch: bool = True
 
 
 class ChannelUpdate(BaseModel):
@@ -33,6 +34,7 @@ class ChannelUpdate(BaseModel):
     min_delay_hours: int | None = None
     credit_template: str | None = None
     is_active: bool | None = None
+    auto_watch: bool | None = None
 
 
 class ChannelResponse(BaseModel):
@@ -45,11 +47,15 @@ class ChannelResponse(BaseModel):
     min_delay_hours: int = 24
     credit_template: str | None = None
     is_active: bool = True
+    auto_watch: bool = True
+    last_checked_at: str | None = None
+    last_video_id: str | None = None
     created_at: str | None = None
 
 
 def _serialize(ch: AuthorizedChannel) -> ChannelResponse:
     created_str = ch.created_at.isoformat() if ch.created_at else None
+    checked_str = ch.last_checked_at.isoformat() if getattr(ch, "last_checked_at", None) else None
     return ChannelResponse(
         id=ch.id,
         name=ch.name,
@@ -60,6 +66,9 @@ def _serialize(ch: AuthorizedChannel) -> ChannelResponse:
         min_delay_hours=ch.min_delay_hours,
         credit_template=ch.credit_template,
         is_active=ch.is_active,
+        auto_watch=getattr(ch, "auto_watch", True) if getattr(ch, "auto_watch", None) is not None else True,
+        last_checked_at=checked_str,
+        last_video_id=getattr(ch, "last_video_id", None),
         created_at=created_str,
     )
 
@@ -121,6 +130,7 @@ async def create_authorized_channel(
         min_delay_hours=payload.min_delay_hours,
         credit_template=payload.credit_template,
         is_active=payload.is_active,
+        auto_watch=payload.auto_watch,
     )
     session.add(ch)
     await session.commit()
@@ -165,3 +175,25 @@ async def delete_authorized_channel(
     await session.delete(ch)
     await session.commit()
     return None
+
+
+@router.post("/check-all", response_model=dict)
+async def check_all_channels_now(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Dispara manualmente a verificação de vídeos novos em todos os canais autorizados ativos.
+    """
+    try:
+        from services.channel_watcher import run_channel_watcher
+        enqueued = await run_channel_watcher(session)
+        return {
+            "status": "success",
+            "enqueued_count": len(enqueued),
+            "enqueued_job_ids": enqueued,
+            "message": f"{len(enqueued)} novo(s) vídeo(s) identificado(s) e enfileirado(s)."
+        }
+    except Exception as e:
+        logger.error("channels.check_all.error", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Erro ao verificar canais: {str(e)[:200]}")

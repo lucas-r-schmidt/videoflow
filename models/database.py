@@ -41,6 +41,9 @@ class AuthorizedChannel(Base):
     min_delay_hours:Mapped[int]           = mapped_column(Integer, default=24)            # Carência mínima em horas
     credit_template:Mapped[str | None]    = mapped_column(String, nullable=True)          # Template opcional customizado
     is_active:      Mapped[bool]          = mapped_column(Boolean, default=True)
+    auto_watch:     Mapped[bool]          = mapped_column(Boolean, default=True, nullable=True) # Monitoramento automático ativo
+    last_checked_at:Mapped[datetime | None]= mapped_column(DateTime, nullable=True)
+    last_video_id:  Mapped[str | None]    = mapped_column(String, nullable=True)
     created_at:     Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -180,6 +183,9 @@ async def init_db():
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS horizontal_flip BOOLEAN DEFAULT FALSE;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watermark_text VARCHAR;",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS platform_post_ids TEXT DEFAULT '[]';",
+            "ALTER TABLE authorized_channels ADD COLUMN IF NOT EXISTS auto_watch BOOLEAN DEFAULT TRUE;",
+            "ALTER TABLE authorized_channels ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMP;",
+            "ALTER TABLE authorized_channels ADD COLUMN IF NOT EXISTS last_video_id VARCHAR;",
         ]
         for stmt in alter_statements:
             try:

@@ -19,4 +19,14 @@ celery_app.config_from_object({
     "task_time_limit":                   2100,      # 35 min hard limit
     "broker_connection_retry_on_startup": True,
     "task_default_queue":                "celery",
+    "beat_schedule": {
+        "channel-watcher-every-6-hours": {
+            "task": "workers.pipeline_task.watch_channels_task",
+            "schedule": 6 * 3600.0, # A cada 6 horas
+        },
+        "cleanup-orphan-files-daily": {
+            "task": "workers.pipeline_task.cleanup_old_files_task",
+            "schedule": 12 * 3600.0, # A cada 12 horas
+        },
+    },
 })

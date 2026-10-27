@@ -126,6 +126,7 @@ export default function Dashboard() {
   const [newChanDelay, setNewChanDelay]     = useState(24)
   const [newChanNotes, setNewChanNotes]     = useState('')
   const [addingChannel, setAddingChannel]   = useState(false)
+  const [checkingChannels, setCheckingChannels] = useState(false)
   const [actionLoadingId, setActionLoadingId] = useState(null)
   const [requiresApproval, setRequiresApproval] = useState(true)
 
@@ -207,6 +208,30 @@ export default function Dashboard() {
       addToast('Canal removido da Whitelist.', 'info')
     } catch {
       addToast('Erro ao remover canal.', 'error')
+    }
+  }
+
+  const handleToggleAutoWatch = async (channel) => {
+    try {
+      await api.patch(`/channels/${channel.id}`, { auto_watch: !channel.auto_watch })
+      fetchChannels()
+      addToast(`Monitoramento automático ${!channel.auto_watch ? 'ativado' : 'pausado'}.`, 'info')
+    } catch {
+      addToast('Erro ao atualizar monitoramento do canal.', 'error')
+    }
+  }
+
+  const handleCheckChannelsNow = async () => {
+    setCheckingChannels(true)
+    try {
+      const { data } = await api.post('/channels/check-all')
+      addToast(data.message || 'Varredura concluída!', 'info')
+      fetchJobs(false)
+      fetchChannels()
+    } catch (err) {
+      addToast(err?.response?.data?.detail || 'Erro ao verificar canais.', 'error')
+    } finally {
+      setCheckingChannels(false)
     }
   }
 
@@ -2007,6 +2032,22 @@ export default function Dashboard() {
 
               {/* Lista de Canais */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: '.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                    Canais Homologados ({authorizedChannels.length})
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={handleCheckChannelsNow}
+                    disabled={checkingChannels}
+                    style={{ gap: 6, color: '#38bdf8', borderColor: 'rgba(56,189,248,0.3)' }}
+                  >
+                    <RefreshCw size={12} style={{ animation: checkingChannels ? 'spin 1.2s linear infinite' : 'none' }} />
+                    {checkingChannels ? 'Buscando novos episódios…' : 'Buscar Novos Episódios 🤖'}
+                  </button>
+                </div>
+
                 {channelsLoading ? (
                   <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)', fontSize: '.85rem' }}>
                     Carregando canais autorizados…
@@ -2047,15 +2088,34 @@ export default function Dashboard() {
                           <span className="badge badge-muted" style={{ fontSize: '.68rem', padding: '2px 6px' }}>
                             ⏳ {ch.min_delay_hours}h carência
                           </span>
+                          {ch.auto_watch && (
+                            <span className="badge badge-info" style={{ fontSize: '.65rem', padding: '1px 5px' }}>
+                              🤖 Auto
+                            </span>
+                          )}
                         </div>
                         {ch.policy_notes && (
                           <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 3 }}>
                             {ch.policy_notes}
                           </div>
                         )}
+                        {ch.last_checked_at && (
+                          <div style={{ fontSize: '.68rem', color: 'var(--text-dim)', marginTop: 2 }}>
+                            Última verificação: {new Date(ch.last_checked_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                          type="button"
+                          className={`btn btn-xs ${ch.auto_watch ? 'btn-primary' : 'btn-outline'}`}
+                          onClick={() => handleToggleAutoWatch(ch)}
+                          style={{ fontSize: '.72rem', padding: '3px 8px' }}
+                          title="Monitorar novos episódios deste canal automaticamente"
+                        >
+                          {ch.auto_watch ? '🤖 Watcher Ativo' : 'Watcher Off'}
+                        </button>
                         <button
                           type="button"
                           className="btn btn-outline btn-xs"

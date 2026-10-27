@@ -305,6 +305,15 @@ async def _run(task: Task, job_id: str):
 
                 log.info("pipeline.processing.done", clips=len(output_files))
 
+                # Purge imediato do vídeo fonte bruto (economia de 98% de espaço no disco)
+                try:
+                    if video_path and video_path.exists() and job.source_type in ("youtube", "url", "google_drive"):
+                        freed_mb = round(video_path.stat().st_size / (1024 * 1024), 1)
+                        video_path.unlink(missing_ok=True)
+                        log.info("pipeline.raw_video_purged", freed_mb=freed_mb)
+                except Exception as e:
+                    log.warning("pipeline.raw_video_purge_failed", error=str(e))
+
                 # ── 3. Armazenamento e Sincronização dos Cortes ────────
                 try:
                     from services.storage import upload_to_r2, is_r2_configured
@@ -562,5 +571,73 @@ async def _publish_job_async(task: Task, job_id: str):
             log.info("publish_job.completed")
     finally:
         await engine.dispose()
+
+
+@celery_app.task(
+    name="workers.pipeline_task.watch_channels_task",
+    bind=True,
+    max_retries=1,
+)
+def watch_channels_task(self):
+    """
+    Verifica periodicamente se canais autorizados da Whitelist postaram episódios novos.
+    Aplica carência mínima e trava de segurança de fila para não lotar o disco.
+    """
+    import asyncio
+    from models.database import engine, AsyncSessionLocal
+    from services.channel_watcher import run_channel_watcher
+
+    async def _run():
+        try:
+            async with AsyncSessionLocal() as session:
+                enqueued = await run_channel_watcher(session)
+                logger.info("watch_channels_task.finished", count=len(enqueued))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+@celery_app.task(
+    name="workers.pipeline_task.cleanup_old_files_task",
+    bind=True,
+    max_retries=1,
+)
+def cleanup_old_files_task(self):
+    """
+    Auto-Purge periódico: remove temporários órfãos e arquivos de cortes rejeitados ou antigos (> 7 dias).
+    """
+    import time
+    from pathlib import Path
+    from config import settings
+
+    logger.info("cleanup_old_files_task.start")
+    freed_bytes = 0
+
+    # 1. Limpa /tmp órfãos com mais de 4 horas
+    tmp_dir = Path(settings.VIDEO_TMP_DIR)
+    if tmp_dir.exists():
+        now = time.time()
+        for f in tmp_dir.iterdir():
+            try:
+                if f.is_file() and (now - f.stat().st_mtime) > (4 * 3600):
+                    freed_bytes += f.stat().st_size
+                    f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # 2. Limpa saídas antigas (> 7 dias)
+    out_dir = Path(settings.VIDEO_OUTPUT_DIR)
+    if out_dir.exists():
+        now = time.time()
+        for f in out_dir.iterdir():
+            try:
+                if f.is_file() and (now - f.stat().st_mtime) > (7 * 86400):
+                    freed_bytes += f.stat().st_size
+                    f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    logger.info("cleanup_old_files_task.finished", freed_mb=round(freed_bytes / (1024 * 1024), 2))
 
 
