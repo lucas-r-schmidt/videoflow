@@ -168,6 +168,27 @@ def _get_niche_instructions(niche_preset: str) -> dict:
                 "#futebol #debate #polemica #cortesdepodcast #futebolbrasileiro #shorts"
             ),
         }
+    elif "biblico" in preset or "faith" in preset or "fe" in preset or "chosen" in preset or "religioso" in preset or "jesus" in preset or "gospel" in preset:
+        return {
+            "ranking_directive": (
+                "DIRETRIZES DE NICHO (BÍBLICO / FÉ / THE CHOSEN / CRISTÃO / EVANGELHO):\n"
+                "- Prioridade ABSOLUTA para momentos de MILAGRES, ENSINAMENTOS DE JESUS, DIÁLOGOS DE ALTO IMPACTO EMOCIONAL, PERDÃO, FÉ E TRANSFORMAÇÃO DE VIDA.\n"
+                "- Priorize falas profundas, parábolas, orações sinceras, momentos de compaixão ou demonstrações da graça divina.\n"
+                "- Cenas que tocam o coração, inspiram esperança e promovem reflexão espiritual recebem score 9 a 10.\n"
+                "- Evite cenas puramente de transição, deslocamento físico ou silêncios sem carga espiritual relevante."
+            ),
+            "hook_directive": "Frase impactante de fé, reflexão ou reverência em CAIXA ALTA (ex: 'OLHA O QUE JESUS DISSE! 🙏', 'ESSA CENA VAI TE EMOCIONAR 😭', 'QUANDO VOCÊ PENSAR EM DESISTIR... ✝️', 'ISSO É O VERDADEIRO AMOR ❤️', 'O PODER DO PERDÃO! ✨').",
+            "title_directive": "Título curto, inspirador e comovente sobre fé ou ensinamento bíblico (máx 60 caracteres).",
+            "caption_directive": "Legenda profunda com lição de fé/esperança, versículo ou reflexão bíblica aplicável, chamada para reflexão/comentário ('Comente Amém', 'Envie para quem precisa ouvir') e hashtags (#jesus #thechosen #fe #versiculododia #deus #reflexaobiblica #cristao #shorts).",
+            "default_hook": "ESSA CENA VAI TE TOCAR 🙏",
+            "default_title": "O Poder do Amor de Deus #Shorts",
+            "default_caption": (
+                "Quando o mundo parecer pesado demais, lembre-se desta mensagem de esperança e fé. 🙏✝️\n\n"
+                "\"Porque para Deus nada é impossível.\" - Lucas 1:37\n\n"
+                "Deixe um 'Amém' nos comentários e compartilhe essa bênção com quem você ama. ❤️\n\n"
+                "#jesus #thechosen #fe #deus #reflexaobiblica #cristao #amor #shorts"
+            ),
+        }
     else:
         return {
             "ranking_directive": (
